@@ -133,6 +133,10 @@ export default function App() {
   const [plannedDate, setPlannedDate] = useState("");
   const [startDateTime, setStartDateTime] = useState(nowDateTimeLocal());
   const [viewMode, setViewMode] = useState("all");
+  const [searchKeyword, setSearchKeyword] = useState("");
+  const [editingId, setEditingId] = useState(null);
+  const [editingTitle, setEditingTitle] = useState("");
+  const [editingPlannedDate, setEditingPlannedDate] = useState("");
 
   const currentUser = session || null;
   const isAdmin = currentUser?.role === "admin";
@@ -150,10 +154,19 @@ export default function App() {
   const doneCount = userTasks.filter((task) => task.status === "已完成").length;
   const preview = useMemo(() => parseTaskInput(input), [input]);
   const filteredTasks = useMemo(() => {
-    if (viewMode === "doing") return userTasks.filter((task) => task.status === "進行中");
-    if (viewMode === "done") return userTasks.filter((task) => task.status === "已完成");
-    return userTasks;
-  }, [userTasks, viewMode]);
+    let result = userTasks;
+    if (viewMode === "doing") result = result.filter((task) => task.status === "進行中");
+    if (viewMode === "done") result = result.filter((task) => task.status === "已完成");
+    if (searchKeyword.trim()) {
+      const keyword = searchKeyword.trim().toLowerCase();
+      result = result.filter(
+        (task) =>
+          task.title.toLowerCase().includes(keyword) ||
+          task.ownerName.toLowerCase().includes(keyword),
+      );
+    }
+    return result;
+  }, [userTasks, viewMode, searchKeyword]);
 
   function upsertUsers(nextUsers) {
     setUsers(nextUsers);
@@ -273,6 +286,43 @@ export default function App() {
     upsertTasks(tasks.filter((task) => task.id !== taskId));
   }
 
+  function beginEdit(task) {
+    setEditingId(task.id);
+    setEditingTitle(task.title);
+    setEditingPlannedDate(task.plannedDate || "");
+  }
+
+  function cancelEdit() {
+    setEditingId(null);
+    setEditingTitle("");
+    setEditingPlannedDate("");
+  }
+
+  function saveEdit(taskId, taskStartDateTime) {
+    if (!editingTitle.trim()) {
+      alert("標題不能空白");
+      return;
+    }
+    if (!editingPlannedDate) {
+      alert("請選擇預計完成時間");
+      return;
+    }
+    const startDateOnly = taskStartDateTime.slice(0, 10);
+    if (editingPlannedDate < startDateOnly) {
+      alert("預計完成時間不得早於開始時間");
+      return;
+    }
+
+    upsertTasks(
+      tasks.map((task) =>
+        task.id === taskId
+          ? { ...task, title: editingTitle.trim(), plannedDate: editingPlannedDate }
+          : task,
+      ),
+    );
+    cancelEdit();
+  }
+
   if (!currentUser) {
     return (
       <main className="page authPage">
@@ -383,6 +433,12 @@ export default function App() {
           <h2>{isAdmin ? "全部任務清單" : "我的任務清單"}</h2>
           <span>{filteredTasks.length} / {userTasks.length} 筆</span>
         </div>
+        <input
+          className="searchInput"
+          value={searchKeyword}
+          onChange={(event) => setSearchKeyword(event.target.value)}
+          placeholder="搜尋任務關鍵字或人員名稱"
+        />
         <div className="filters">
           <button type="button" className={viewMode === "all" ? "active" : ""} onClick={() => setViewMode("all")}>
             全部
@@ -400,21 +456,40 @@ export default function App() {
         ) : (
           <div className="list">
             {filteredTasks.map((task) => (
+              (() => {
+                const today = nowDateTimeLocal().slice(0, 10);
+                const tomorrowDate = new Date();
+                tomorrowDate.setDate(tomorrowDate.getDate() + 1);
+                const tomorrow = toDateOnlyString(tomorrowDate);
+                const isLate = task.status !== "已完成" && task.plannedDate && task.plannedDate < today;
+                const isDueToday = task.status !== "已完成" && task.plannedDate === today;
+                const isDueTomorrow = task.status !== "已完成" && task.plannedDate === tomorrow;
+                const dueClass = isLate ? "late" : isDueToday ? "today" : isDueTomorrow ? "tomorrow" : "";
+                const dueText = isLate ? "已逾期" : isDueToday ? "今天到期" : isDueTomorrow ? "明天到期" : "";
+                return (
               <article
                 key={task.id}
-                className={`taskItem ${
-                  task.status !== "已完成" &&
-                  task.plannedDate &&
-                  task.plannedDate < nowDateTimeLocal().slice(0, 10)
-                    ? "late"
-                    : ""
-                }`}
+                className={`taskItem ${dueClass}`}
               >
                 <div className="taskMain">
-                  <h3>{task.title}</h3>
+                  {editingId === task.id ? (
+                    <div className="editFields">
+                      <input value={editingTitle} onChange={(event) => setEditingTitle(event.target.value)} />
+                      <input
+                        type="date"
+                        value={editingPlannedDate}
+                        onChange={(event) => setEditingPlannedDate(event.target.value)}
+                      />
+                    </div>
+                  ) : (
+                    <h3>{task.title}</h3>
+                  )}
                   <p>人員：{task.ownerName}</p>
                   <p>開始時間：{formatDateTime(task.startDateTime)}</p>
-                  <p>預計完成：{formatDate(task.plannedDate)}</p>
+                  <p>
+                    預計完成：{formatDate(task.plannedDate)}
+                    {dueText ? `（${dueText}）` : ""}
+                  </p>
                 </div>
 
                 <span className={`badge ${task.status === "已完成" ? "done" : "doing"}`}>
@@ -425,11 +500,27 @@ export default function App() {
                   <button type="button" onClick={() => toggleStatus(task.id)}>
                     {task.status === "已完成" ? "改為進行中" : "標示完成"}
                   </button>
+                  {editingId === task.id ? (
+                    <>
+                      <button type="button" className="secondary" onClick={() => saveEdit(task.id, task.startDateTime)}>
+                        儲存
+                      </button>
+                      <button type="button" className="ghost" onClick={cancelEdit}>
+                        取消
+                      </button>
+                    </>
+                  ) : (
+                    <button type="button" className="secondary" onClick={() => beginEdit(task)}>
+                      編輯
+                    </button>
+                  )}
                   <button type="button" className="danger" onClick={() => removeTask(task.id)}>
                     刪除
                   </button>
                 </div>
               </article>
+                );
+              })()
             ))}
           </div>
         )}
