@@ -433,12 +433,16 @@ export default function App() {
           <h2>{isAdmin ? "全部任務清單" : "我的任務清單"}</h2>
           <span>{filteredTasks.length} / {userTasks.length} 筆</span>
         </div>
-        <input
-          className="searchInput"
-          value={searchKeyword}
-          onChange={(event) => setSearchKeyword(event.target.value)}
-          placeholder="搜尋任務關鍵字或人員名稱"
-        />
+        <div className="searchBox">
+          <label htmlFor="task-search">任務搜尋</label>
+          <input
+            id="task-search"
+            className="searchInput"
+            value={searchKeyword}
+            onChange={(event) => setSearchKeyword(event.target.value)}
+            placeholder="輸入關鍵字（任務標題 / 人員名稱）"
+          />
+        </div>
         <div className="filters">
           <button type="button" className={viewMode === "all" ? "active" : ""} onClick={() => setViewMode("all")}>
             全部

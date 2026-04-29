@@ -179,7 +179,18 @@ button.small {
 }
 
 .searchInput {
+  margin-top: 6px;
+}
+
+.searchBox {
   margin-top: 10px;
+}
+
+.searchBox label {
+  display: block;
+  font-size: 13px;
+  color: #3d5b8d;
+  font-weight: 600;
 }
 
 .filters {
