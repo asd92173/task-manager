@@ -20,23 +20,9 @@ body {
   gap: 14px;
 }
 
-.hero {
-  background: #ffffff;
-  border: 1px solid #dde5f1;
-  border-radius: 12px;
-  padding: 18px;
-}
-
-.hero h1 {
-  margin: 0;
-  font-size: clamp(24px, 3vw, 30px);
-  letter-spacing: 0.3px;
-}
-
-.hero p {
-  margin: 8px 0 0;
-  color: #4d6489;
-  font-size: 14px;
+.authPage {
+  min-height: 100vh;
+  place-content: center;
 }
 
 .panel {
@@ -44,6 +30,38 @@ body {
   border: 1px solid #dde5f1;
   border-radius: 12px;
   padding: 14px;
+}
+
+.authPanel {
+  max-width: 420px;
+  width: 100%;
+  margin: 0 auto;
+  display: grid;
+  gap: 10px;
+}
+
+.authPanel h1 {
+  margin: 0;
+}
+
+.authPanel p {
+  margin: 0;
+  color: #4d6489;
+}
+
+.hero {
+  display: grid;
+  gap: 8px;
+}
+
+.hero h1 {
+  margin: 0;
+  font-size: clamp(24px, 3vw, 30px);
+}
+
+.hero p {
+  margin: 0;
+  color: #4d6489;
 }
 
 .inputPanel {
@@ -67,7 +85,7 @@ textarea {
 
 .toolbar {
   display: grid;
-  grid-template-columns: 1fr 130px;
+  grid-template-columns: 1fr 1fr;
   gap: 8px;
 }
 
@@ -85,12 +103,30 @@ button:hover {
   background: #1f56a8;
 }
 
+button.secondary {
+  background: #4f709f;
+}
+
+button.ghost {
+  background: #edf2fb;
+  color: #204b8e;
+}
+
+button.small {
+  width: fit-content;
+}
+
 .preview {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
   font-size: 14px;
   color: #4a6288;
+}
+
+.authMessage {
+  color: #b22222;
+  font-size: 14px;
 }
 
 .statsGrid {

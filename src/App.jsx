@@ -1,18 +1,11 @@
 ﻿import { useMemo, useState } from "react";
 import "./App.css";
 
-const STORAGE_KEY = "talk-task-manager-v1";
+const USERS_KEY = "talk-task-users-v1";
+const SESSION_KEY = "talk-task-session-v1";
+const TASKS_KEY = "talk-task-manager-v2";
 
-const WEEKDAY_MAP = {
-  日: 0,
-  天: 0,
-  一: 1,
-  二: 2,
-  三: 3,
-  四: 4,
-  五: 5,
-  六: 6,
-};
+const WEEKDAY_MAP = { 日: 0, 天: 0, 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6 };
 
 function pad(number) {
   return String(number).padStart(2, "0");
@@ -25,10 +18,7 @@ function formatDate(dateString) {
 }
 
 function toDateOnlyString(date) {
-  const y = date.getFullYear();
-  const m = pad(date.getMonth() + 1);
-  const d = pad(date.getDate());
-  return `${y}-${m}-${d}`;
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 }
 
 function cloneDate(date) {
@@ -38,6 +28,7 @@ function cloneDate(date) {
 function parseWeekday(text, now) {
   const match = text.match(/(?:下)?(?:週|周)([一二三四五六日天])/);
   if (!match) return null;
+
   const targetDay = WEEKDAY_MAP[match[1]];
   if (targetDay === undefined) return null;
 
@@ -46,7 +37,6 @@ function parseWeekday(text, now) {
   let offset = (targetDay - currentDay + 7) % 7;
   const isNextWeek = text.includes("下週") || text.includes("下周");
   if (offset === 0 || isNextWeek) offset += 7;
-
   result.setDate(result.getDate() + offset);
   return result;
 }
@@ -62,11 +52,6 @@ function parseDate(text) {
   }
   if (text.includes("後天")) {
     base.setDate(base.getDate() + 2);
-    return toDateOnlyString(base);
-  }
-  if (text.includes("本週末") || text.includes("這週末")) {
-    const offset = (6 - base.getDay() + 7) % 7;
-    base.setDate(base.getDate() + offset);
     return toDateOnlyString(base);
   }
 
@@ -92,7 +77,7 @@ function extractTitle(text) {
   return text
     .replace(/(\d{4})[\/-](\d{1,2})[\/-](\d{1,2})/g, "")
     .replace(/(\d{1,2})[\/-](\d{1,2})/g, "")
-    .replace(/今天|明天|後天|本週末|這週末|下週|下周|週|周|前|之前|完成|要|我要|我今天|在|前完成/g, " ")
+    .replace(/今天|明天|後天|下週|下周|週|周|前|之前|完成|要|我要|我今天|在|前完成/g, " ")
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -103,45 +88,112 @@ function parseTaskInput(text) {
   return { title, deadline };
 }
 
-function loadTasks() {
+function loadJson(key, fallback) {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
+    const raw = localStorage.getItem(key);
+    if (!raw) return fallback;
+    return JSON.parse(raw);
   } catch {
-    return [];
+    return fallback;
   }
 }
 
-function saveTasks(tasks) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(tasks));
+function saveJson(key, value) {
+  localStorage.setItem(key, JSON.stringify(value));
+}
+
+function getSpeechRecognition() {
+  return window.SpeechRecognition || window.webkitSpeechRecognition;
 }
 
 export default function App() {
-  const [input, setInput] = useState("今天我要寫 PLC 程式，週五前完成");
-  const [owner, setOwner] = useState("未指派");
-  const [tasks, setTasks] = useState(loadTasks);
+  const [users, setUsers] = useState(() => loadJson(USERS_KEY, []));
+  const [session, setSession] = useState(() => loadJson(SESSION_KEY, null));
+  const [tasks, setTasks] = useState(() => loadJson(TASKS_KEY, []));
 
+  const [isRegister, setIsRegister] = useState(false);
+  const [authAccount, setAuthAccount] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
+  const [authName, setAuthName] = useState("");
+  const [authMessage, setAuthMessage] = useState("");
+
+  const [input, setInput] = useState("今天我要寫 PLC 程式，週五前完成");
+  const [isListening, setIsListening] = useState(false);
+
+  const currentUser = users.find((item) => item.account === session?.account) || null;
+  const userTasks = tasks.filter((task) => task.ownerAccount === session?.account);
+  const doneCount = userTasks.filter((task) => task.status === "已完成").length;
   const preview = useMemo(() => parseTaskInput(input), [input]);
-  const doneCount = tasks.filter((task) => task.status === "已完成").length;
+
+  function upsertUsers(nextUsers) {
+    setUsers(nextUsers);
+    saveJson(USERS_KEY, nextUsers);
+  }
 
   function upsertTasks(nextTasks) {
     setTasks(nextTasks);
-    saveTasks(nextTasks);
+    saveJson(TASKS_KEY, nextTasks);
+  }
+
+  function doRegister() {
+    if (!authAccount.trim() || !authPassword.trim() || !authName.trim()) {
+      setAuthMessage("請填寫帳號、密碼、人員名稱");
+      return;
+    }
+
+    if (users.some((item) => item.account === authAccount.trim())) {
+      setAuthMessage("此帳號已存在");
+      return;
+    }
+
+    const nextUsers = [
+      ...users,
+      { account: authAccount.trim(), password: authPassword, name: authName.trim() },
+    ];
+
+    upsertUsers(nextUsers);
+    const nextSession = { account: authAccount.trim() };
+    setSession(nextSession);
+    saveJson(SESSION_KEY, nextSession);
+    setAuthMessage("註冊成功，已登入");
+    setAuthPassword("");
+  }
+
+  function doLogin() {
+    const matched = users.find(
+      (item) => item.account === authAccount.trim() && item.password === authPassword,
+    );
+
+    if (!matched) {
+      setAuthMessage("帳號或密碼錯誤");
+      return;
+    }
+
+    const nextSession = { account: matched.account };
+    setSession(nextSession);
+    saveJson(SESSION_KEY, nextSession);
+    setAuthMessage("登入成功");
+    setAuthPassword("");
+  }
+
+  function logout() {
+    setSession(null);
+    localStorage.removeItem(SESSION_KEY);
   }
 
   function addTask() {
+    if (!currentUser) return;
     if (!input.trim()) return;
-    const parsed = parseTaskInput(input);
 
+    const parsed = parseTaskInput(input);
     const nextTasks = [
       {
         id: crypto.randomUUID(),
         title: parsed.title,
-        owner: owner.trim() || "未指派",
         deadline: parsed.deadline,
         status: "進行中",
+        ownerName: currentUser.name,
+        ownerAccount: currentUser.account,
       },
       ...tasks,
     ];
@@ -164,11 +216,83 @@ export default function App() {
     upsertTasks(tasks.filter((task) => task.id !== taskId));
   }
 
+  function startVoiceInput() {
+    const SpeechRecognition = getSpeechRecognition();
+    if (!SpeechRecognition) {
+      alert("此瀏覽器不支援語音輸入，請改用 Chrome。");
+      return;
+    }
+
+    const recognition = new SpeechRecognition();
+    recognition.lang = "zh-TW";
+    recognition.interimResults = false;
+    recognition.maxAlternatives = 1;
+
+    setIsListening(true);
+    recognition.onresult = (event) => {
+      const text = event.results?.[0]?.[0]?.transcript || "";
+      if (text) {
+        setInput((prev) => (prev ? `${prev} ${text}` : text));
+      }
+    };
+    recognition.onerror = () => {
+      setIsListening(false);
+    };
+    recognition.onend = () => {
+      setIsListening(false);
+    };
+    recognition.start();
+  }
+
+  if (!currentUser) {
+    return (
+      <main className="page authPage">
+        <section className="panel authPanel">
+          <h1>{isRegister ? "申請帳號" : "登入"}</h1>
+          <p>先登入才能建立任務，任務會記錄人員名稱。</p>
+
+          <input
+            value={authAccount}
+            onChange={(event) => setAuthAccount(event.target.value)}
+            placeholder="帳號"
+          />
+          <input
+            type="password"
+            value={authPassword}
+            onChange={(event) => setAuthPassword(event.target.value)}
+            placeholder="密碼"
+          />
+
+          {isRegister && (
+            <input
+              value={authName}
+              onChange={(event) => setAuthName(event.target.value)}
+              placeholder="人員名稱（例如：王小明）"
+            />
+          )}
+
+          <button type="button" onClick={isRegister ? doRegister : doLogin}>
+            {isRegister ? "註冊並登入" : "登入"}
+          </button>
+
+          <button type="button" className="ghost" onClick={() => setIsRegister((prev) => !prev)}>
+            {isRegister ? "我已有帳號，改成登入" : "沒有帳號，申請一個"}
+          </button>
+
+          {authMessage && <p className="authMessage">{authMessage}</p>}
+        </section>
+      </main>
+    );
+  }
+
   return (
     <main className="page">
       <header className="hero">
         <h1>口語任務板</h1>
-        <p>像聊天一樣輸入，例如「今天我要寫 PLC 程式，週五前完成」。</p>
+        <p>登入者：{currentUser.name}（{currentUser.account}）</p>
+        <button type="button" className="ghost small" onClick={logout}>
+          登出
+        </button>
       </header>
 
       <section className="panel inputPanel">
@@ -180,11 +304,9 @@ export default function App() {
         />
 
         <div className="toolbar">
-          <input
-            value={owner}
-            onChange={(event) => setOwner(event.target.value)}
-            placeholder="負責人（可選）"
-          />
+          <button type="button" onClick={startVoiceInput} className="secondary">
+            {isListening ? "語音辨識中..." : "語音輸入"}
+          </button>
           <button type="button" onClick={addTask}>
             新增任務
           </button>
@@ -193,13 +315,14 @@ export default function App() {
         <div className="preview">
           <span>預覽任務：{preview.title || "未解析"}</span>
           <span>截止：{formatDate(preview.deadline)}</span>
+          <span>人員：{currentUser.name}</span>
         </div>
       </section>
 
       <section className="statsGrid">
         <article className="panel stat">
-          <h2>總任務</h2>
-          <strong>{tasks.length}</strong>
+          <h2>我的總任務</h2>
+          <strong>{userTasks.length}</strong>
         </article>
         <article className="panel stat">
           <h2>已完成</h2>
@@ -207,26 +330,26 @@ export default function App() {
         </article>
         <article className="panel stat">
           <h2>進行中</h2>
-          <strong>{tasks.length - doneCount}</strong>
+          <strong>{userTasks.length - doneCount}</strong>
         </article>
       </section>
 
       <section className="panel listPanel">
         <div className="listHead">
-          <h2>任務清單</h2>
-          <span>{tasks.length} 筆</span>
+          <h2>我的任務清單</h2>
+          <span>{userTasks.length} 筆</span>
         </div>
 
-        {tasks.length === 0 ? (
+        {userTasks.length === 0 ? (
           <p className="empty">目前沒有任務，先新增一筆。</p>
         ) : (
           <div className="list">
-            {tasks.map((task) => (
+            {userTasks.map((task) => (
               <article key={task.id} className="taskItem">
                 <div className="taskMain">
                   <h3>{task.title}</h3>
                   <p>
-                    負責人：{task.owner} ・ 截止：{formatDate(task.deadline)}
+                    人員：{task.ownerName} ・ 截止：{formatDate(task.deadline)}
                   </p>
                 </div>
 
