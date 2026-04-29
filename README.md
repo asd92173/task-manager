@@ -26,7 +26,7 @@ npm run dev
 
 1. 建立 GitHub Repo（建議 repo 名稱：`task-manager`）
 2. 把這份專案推到 `main` 分支
-3. 到 GitHub 專案設定：`Settings` → `Pages`
+3. 到 GitHub 專案設定：`Settings` -> `Pages`
 4. `Build and deployment` 的來源選 `GitHub Actions`
 5. 之後每次推送到 `main`，都會自動發布
 
