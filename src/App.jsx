@@ -118,10 +118,6 @@ function saveJson(key, value) {
   localStorage.setItem(key, JSON.stringify(value));
 }
 
-function getSpeechRecognition() {
-  return window.SpeechRecognition || window.webkitSpeechRecognition;
-}
-
 export default function App() {
   const [users, setUsers] = useState(() => loadJson(USERS_KEY, []));
   const [session, setSession] = useState(() => loadJson(SESSION_KEY, null));
@@ -136,20 +132,28 @@ export default function App() {
   const [input, setInput] = useState("今天我要寫 PLC 程式，週五前完成");
   const [plannedDate, setPlannedDate] = useState("");
   const [startDateTime, setStartDateTime] = useState(nowDateTimeLocal());
-  const [isListening, setIsListening] = useState(false);
+  const [viewMode, setViewMode] = useState("all");
 
-  const currentUser = users.find((item) => item.account === session?.account) || null;
+  const currentUser = session || null;
+  const isAdmin = currentUser?.role === "admin";
   const userTasks = useMemo(() => {
-    const ownedTasks = tasks.filter((task) => task.ownerAccount === session?.account);
+    const ownedTasks = isAdmin
+      ? tasks
+      : tasks.filter((task) => task.ownerAccount === currentUser?.account);
     return [...ownedTasks].sort((a, b) => {
       if (!a.plannedDate && !b.plannedDate) return 0;
       if (!a.plannedDate) return 1;
       if (!b.plannedDate) return -1;
       return a.plannedDate.localeCompare(b.plannedDate);
     });
-  }, [tasks, session?.account]);
+  }, [tasks, isAdmin, currentUser?.account]);
   const doneCount = userTasks.filter((task) => task.status === "已完成").length;
   const preview = useMemo(() => parseTaskInput(input), [input]);
+  const filteredTasks = useMemo(() => {
+    if (viewMode === "doing") return userTasks.filter((task) => task.status === "進行中");
+    if (viewMode === "done") return userTasks.filter((task) => task.status === "已完成");
+    return userTasks;
+  }, [userTasks, viewMode]);
 
   function upsertUsers(nextUsers) {
     setUsers(nextUsers);
@@ -178,7 +182,7 @@ export default function App() {
     ];
 
     upsertUsers(nextUsers);
-    const nextSession = { account: authAccount.trim() };
+    const nextSession = { account: authAccount.trim(), name: authName.trim(), role: "user" };
     setSession(nextSession);
     saveJson(SESSION_KEY, nextSession);
     setAuthMessage("註冊成功，已登入");
@@ -186,6 +190,15 @@ export default function App() {
   }
 
   function doLogin() {
+    if (authAccount.trim() === "admin" && authPassword === "admin") {
+      const adminSession = { account: "admin", name: "管理員", role: "admin" };
+      setSession(adminSession);
+      saveJson(SESSION_KEY, adminSession);
+      setAuthMessage("管理員登入成功");
+      setAuthPassword("");
+      return;
+    }
+
     const matched = users.find(
       (item) => item.account === authAccount.trim() && item.password === authPassword,
     );
@@ -195,7 +208,7 @@ export default function App() {
       return;
     }
 
-    const nextSession = { account: matched.account };
+    const nextSession = { account: matched.account, name: matched.name, role: "user" };
     setSession(nextSession);
     saveJson(SESSION_KEY, nextSession);
     setAuthMessage("登入成功");
@@ -260,34 +273,6 @@ export default function App() {
     upsertTasks(tasks.filter((task) => task.id !== taskId));
   }
 
-  function startVoiceInput() {
-    const SpeechRecognition = getSpeechRecognition();
-    if (!SpeechRecognition) {
-      alert("此瀏覽器不支援語音輸入，請改用 Chrome。");
-      return;
-    }
-
-    const recognition = new SpeechRecognition();
-    recognition.lang = "zh-TW";
-    recognition.interimResults = false;
-    recognition.maxAlternatives = 1;
-
-    setIsListening(true);
-    recognition.onresult = (event) => {
-      const text = event.results?.[0]?.[0]?.transcript || "";
-      if (text) {
-        setInput((prev) => (prev ? `${prev} ${text}` : text));
-      }
-    };
-    recognition.onerror = () => {
-      setIsListening(false);
-    };
-    recognition.onend = () => {
-      setIsListening(false);
-    };
-    recognition.start();
-  }
-
   if (!currentUser) {
     return (
       <main className="page authPage">
@@ -333,7 +318,10 @@ export default function App() {
     <main className="page">
       <header className="hero panel">
         <h1>口語任務板</h1>
-        <p>登入者：{currentUser.name}（{currentUser.account}）</p>
+        <p>
+          登入者：{currentUser.name}（{currentUser.account}）
+          {isAdmin ? "・管理員模式" : ""}
+        </p>
         <button type="button" className="ghost small" onClick={logout}>
           登出
         </button>
@@ -359,9 +347,6 @@ export default function App() {
         </div>
 
         <div className="toolbar">
-          <button type="button" onClick={startVoiceInput} className="secondary">
-            {isListening ? "語音辨識中..." : "語音輸入"}
-          </button>
           <button type="button" className="ghost" onClick={fillPlannedDateByText}>
             套用口語日期
           </button>
@@ -380,7 +365,7 @@ export default function App() {
 
       <section className="statsGrid">
         <article className="panel stat">
-          <h2>我的總任務</h2>
+          <h2>{isAdmin ? "全部任務" : "我的總任務"}</h2>
           <strong>{userTasks.length}</strong>
         </article>
         <article className="panel stat">
@@ -395,16 +380,36 @@ export default function App() {
 
       <section className="panel listPanel">
         <div className="listHead">
-          <h2>我的任務清單</h2>
-          <span>{userTasks.length} 筆</span>
+          <h2>{isAdmin ? "全部任務清單" : "我的任務清單"}</h2>
+          <span>{filteredTasks.length} / {userTasks.length} 筆</span>
+        </div>
+        <div className="filters">
+          <button type="button" className={viewMode === "all" ? "active" : ""} onClick={() => setViewMode("all")}>
+            全部
+          </button>
+          <button type="button" className={viewMode === "doing" ? "active" : ""} onClick={() => setViewMode("doing")}>
+            進行中
+          </button>
+          <button type="button" className={viewMode === "done" ? "active" : ""} onClick={() => setViewMode("done")}>
+            已完成
+          </button>
         </div>
 
-        {userTasks.length === 0 ? (
+        {filteredTasks.length === 0 ? (
           <p className="empty">目前沒有任務，先新增一筆。</p>
         ) : (
           <div className="list">
-            {userTasks.map((task) => (
-              <article key={task.id} className="taskItem">
+            {filteredTasks.map((task) => (
+              <article
+                key={task.id}
+                className={`taskItem ${
+                  task.status !== "已完成" &&
+                  task.plannedDate &&
+                  task.plannedDate < nowDateTimeLocal().slice(0, 10)
+                    ? "late"
+                    : ""
+                }`}
+              >
                 <div className="taskMain">
                   <h3>{task.title}</h3>
                   <p>人員：{task.ownerName}</p>
