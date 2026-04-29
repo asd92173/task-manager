@@ -17,6 +17,22 @@ function formatDate(dateString) {
   return `${date.getFullYear()}/${pad(date.getMonth() + 1)}/${pad(date.getDate())}`;
 }
 
+function formatDateTime(dateTimeString) {
+  if (!dateTimeString) return "未設定";
+  const date = new Date(dateTimeString);
+  return `${date.getFullYear()}/${pad(date.getMonth() + 1)}/${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function nowDateTimeLocal() {
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = pad(now.getMonth() + 1);
+  const d = pad(now.getDate());
+  const h = pad(now.getHours());
+  const min = pad(now.getMinutes());
+  return `${y}-${m}-${d}T${h}:${min}`;
+}
+
 function toDateOnlyString(date) {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 }
@@ -83,9 +99,9 @@ function extractTitle(text) {
 }
 
 function parseTaskInput(text) {
-  const deadline = parseDate(text);
+  const suggestedDate = parseDate(text);
   const title = extractTitle(text) || text.trim();
-  return { title, deadline };
+  return { title, suggestedDate };
 }
 
 function loadJson(key, fallback) {
@@ -118,10 +134,20 @@ export default function App() {
   const [authMessage, setAuthMessage] = useState("");
 
   const [input, setInput] = useState("今天我要寫 PLC 程式，週五前完成");
+  const [plannedDate, setPlannedDate] = useState("");
+  const [startDateTime, setStartDateTime] = useState(nowDateTimeLocal());
   const [isListening, setIsListening] = useState(false);
 
   const currentUser = users.find((item) => item.account === session?.account) || null;
-  const userTasks = tasks.filter((task) => task.ownerAccount === session?.account);
+  const userTasks = useMemo(() => {
+    const ownedTasks = tasks.filter((task) => task.ownerAccount === session?.account);
+    return [...ownedTasks].sort((a, b) => {
+      if (!a.plannedDate && !b.plannedDate) return 0;
+      if (!a.plannedDate) return 1;
+      if (!b.plannedDate) return -1;
+      return a.plannedDate.localeCompare(b.plannedDate);
+    });
+  }, [tasks, session?.account]);
   const doneCount = userTasks.filter((task) => task.status === "已完成").length;
   const preview = useMemo(() => parseTaskInput(input), [input]);
 
@@ -184,13 +210,23 @@ export default function App() {
   function addTask() {
     if (!currentUser) return;
     if (!input.trim()) return;
+    if (!plannedDate) {
+      alert("請先選擇預計完成時間");
+      return;
+    }
+    const startDateOnly = startDateTime.slice(0, 10);
+    if (plannedDate < startDateOnly) {
+      alert("預計完成時間不得早於開始時間");
+      return;
+    }
 
     const parsed = parseTaskInput(input);
     const nextTasks = [
       {
         id: crypto.randomUUID(),
         title: parsed.title,
-        deadline: parsed.deadline,
+        plannedDate,
+        startDateTime,
         status: "進行中",
         ownerName: currentUser.name,
         ownerAccount: currentUser.account,
@@ -200,6 +236,14 @@ export default function App() {
 
     upsertTasks(nextTasks);
     setInput("");
+    setPlannedDate("");
+    setStartDateTime(nowDateTimeLocal());
+  }
+
+  function fillPlannedDateByText() {
+    if (preview.suggestedDate) {
+      setPlannedDate(preview.suggestedDate);
+    }
   }
 
   function toggleStatus(taskId) {
@@ -287,7 +331,7 @@ export default function App() {
 
   return (
     <main className="page">
-      <header className="hero">
+      <header className="hero panel">
         <h1>口語任務板</h1>
         <p>登入者：{currentUser.name}（{currentUser.account}）</p>
         <button type="button" className="ghost small" onClick={logout}>
@@ -303,9 +347,23 @@ export default function App() {
           placeholder="輸入你的任務內容與截止時間"
         />
 
+        <div className="fieldGrid">
+          <label>
+            開始時間（建立時自動帶入）
+            <input type="datetime-local" value={startDateTime} readOnly />
+          </label>
+          <label>
+            預計完成時間（必填）
+            <input type="date" value={plannedDate} onChange={(event) => setPlannedDate(event.target.value)} required />
+          </label>
+        </div>
+
         <div className="toolbar">
           <button type="button" onClick={startVoiceInput} className="secondary">
             {isListening ? "語音辨識中..." : "語音輸入"}
+          </button>
+          <button type="button" className="ghost" onClick={fillPlannedDateByText}>
+            套用口語日期
           </button>
           <button type="button" onClick={addTask}>
             新增任務
@@ -314,7 +372,8 @@ export default function App() {
 
         <div className="preview">
           <span>預覽任務：{preview.title || "未解析"}</span>
-          <span>截止：{formatDate(preview.deadline)}</span>
+          <span>口語日期建議：{formatDate(preview.suggestedDate)}</span>
+          <span>已選預計完成：{formatDate(plannedDate)}</span>
           <span>人員：{currentUser.name}</span>
         </div>
       </section>
@@ -348,9 +407,9 @@ export default function App() {
               <article key={task.id} className="taskItem">
                 <div className="taskMain">
                   <h3>{task.title}</h3>
-                  <p>
-                    人員：{task.ownerName} ・ 截止：{formatDate(task.deadline)}
-                  </p>
+                  <p>人員：{task.ownerName}</p>
+                  <p>開始時間：{formatDateTime(task.startDateTime)}</p>
+                  <p>預計完成：{formatDate(task.plannedDate)}</p>
                 </div>
 
                 <span className={`badge ${task.status === "已完成" ? "done" : "doing"}`}>
