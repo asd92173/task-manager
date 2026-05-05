@@ -116,7 +116,6 @@ function normalizeUsername(username) {
 }
 
 function toAuthEmail(username) {
-  if (username === "admin") return "admin@admin.com";
   return `${normalizeUsername(username)}@app.local`;
 }
 
@@ -186,7 +185,7 @@ export default function App() {
         id: userId,
         email,
         display_name: displayName,
-        role: email === "admin@admin.com" ? "admin" : "user",
+        role: "user",
       });
       if (insertProfileError) throw insertProfileError;
     }
@@ -479,13 +478,7 @@ export default function App() {
       <header className="hero panel">
         <h1>口語任務板</h1>
         <p>
-          登入者：{profile?.display_name || "使用者"}（
-          {profile?.email
-            ? profile.email === "admin@admin.com"
-              ? "admin"
-              : profile.email.replace("@app.local", "")
-            : "unknown"}
-          ）
+          登入者：{profile?.display_name || "使用者"}（{profile?.email ? profile.email.replace("@app.local", "") : "unknown"}）
           {isAdmin ? "・管理員模式" : ""}
         </p>
         <button type="button" className="ghost small" onClick={logout}>登出</button>
