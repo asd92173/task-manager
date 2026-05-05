@@ -65,13 +65,13 @@ function parseDate(text) {
   const weekdayDate = parseWeekday(text, now);
   if (weekdayDate) return toDateOnlyString(weekdayDate);
 
-  const fullDateMatch = text.match(/(\d{4})[\/-](\d{1,2})[\/-](\d{1,2})/);
+  const fullDateMatch = text.match(/(\d{4})[/-](\d{1,2})[/-](\d{1,2})/);
   if (fullDateMatch) {
     const [, year, month, day] = fullDateMatch;
     return toDateOnlyString(new Date(Number(year), Number(month) - 1, Number(day)));
   }
 
-  const monthDayMatch = text.match(/(\d{1,2})[\/-](\d{1,2})/);
+  const monthDayMatch = text.match(/(\d{1,2})[/-](\d{1,2})/);
   if (monthDayMatch) {
     const [, month, day] = monthDayMatch;
     return toDateOnlyString(new Date(now.getFullYear(), Number(month) - 1, Number(day)));
@@ -82,8 +82,8 @@ function parseDate(text) {
 
 function extractTitle(text) {
   return text
-    .replace(/(\d{4})[\/-](\d{1,2})[\/-](\d{1,2})/g, "")
-    .replace(/(\d{1,2})[\/-](\d{1,2})/g, "")
+    .replace(/(\d{4})[/-](\d{1,2})[/-](\d{1,2})/g, "")
+    .replace(/(\d{1,2})[/-](\d{1,2})/g, "")
     .replace(/今天|明天|後天|下週|下周|週|周|前|之前|完成|要|我要|我今天|在|前完成/g, " ")
     .replace(/\s+/g, " ")
     .trim();
@@ -124,7 +124,7 @@ export default function App() {
   const [session, setSession] = useState(null);
   const [profile, setProfile] = useState(null);
   const [tasks, setTasks] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(hasSupabaseEnv);
   const [loadError, setLoadError] = useState("");
   const [loadTick, setLoadTick] = useState(0);
 
@@ -213,10 +213,7 @@ export default function App() {
   }
 
   useEffect(() => {
-    if (!hasSupabaseEnv || !supabase) {
-      setLoading(false);
-      return;
-    }
+    if (!hasSupabaseEnv || !supabase) return;
 
     let mounted = true;
     const timeoutPromise = new Promise((_, reject) =>
