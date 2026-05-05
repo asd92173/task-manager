@@ -22,12 +22,7 @@ function formatDateTime(dateTimeString) {
 
 function nowDateTimeLocal() {
   const now = new Date();
-  const y = now.getFullYear();
-  const m = pad(now.getMonth() + 1);
-  const d = pad(now.getDate());
-  const h = pad(now.getHours());
-  const min = pad(now.getMinutes());
-  return `${y}-${m}-${d}T${h}:${min}`;
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}`;
 }
 
 function toDateOnlyString(date) {
@@ -41,7 +36,6 @@ function cloneDate(date) {
 function parseWeekday(text, now) {
   const match = text.match(/(?:下)?(?:週|周)([一二三四五六日天])/);
   if (!match) return null;
-
   const targetDay = WEEKDAY_MAP[match[1]];
   if (targetDay === undefined) return null;
 
@@ -96,9 +90,7 @@ function extractTitle(text) {
 }
 
 function parseTaskInput(text) {
-  const suggestedDate = parseDate(text);
-  const title = extractTitle(text) || text.trim();
-  return { title, suggestedDate };
+  return { title: extractTitle(text) || text.trim(), suggestedDate: parseDate(text) };
 }
 
 function getDueMeta(task) {
@@ -107,14 +99,25 @@ function getDueMeta(task) {
   tomorrowDate.setDate(tomorrowDate.getDate() + 1);
   const tomorrow = toDateOnlyString(tomorrowDate);
 
-  const isLate = task.status !== "已完成" && task.planned_date && task.planned_date < today;
-  const isToday = task.status !== "已完成" && task.planned_date === today;
-  const isTomorrow = task.status !== "已完成" && task.planned_date === tomorrow;
-
-  if (isLate) return { className: "late", label: "已逾期" };
-  if (isToday) return { className: "today", label: "今天到期" };
-  if (isTomorrow) return { className: "tomorrow", label: "明天到期" };
+  if (task.status !== "已完成" && task.planned_date && task.planned_date < today) {
+    return { className: "late", label: "已逾期" };
+  }
+  if (task.status !== "已完成" && task.planned_date === today) {
+    return { className: "today", label: "今天到期" };
+  }
+  if (task.status !== "已完成" && task.planned_date === tomorrow) {
+    return { className: "tomorrow", label: "明天到期" };
+  }
   return { className: "", label: "" };
+}
+
+function normalizeUsername(username) {
+  return username.trim().toLowerCase();
+}
+
+function toAuthEmail(username) {
+  if (username === "admin") return "admin@admin.com";
+  return `${normalizeUsername(username)}@app.local`;
 }
 
 export default function App() {
@@ -126,7 +129,7 @@ export default function App() {
   const [loadTick, setLoadTick] = useState(0);
 
   const [isRegister, setIsRegister] = useState(false);
-  const [authEmail, setAuthEmail] = useState("");
+  const [authUsername, setAuthUsername] = useState("");
   const [authPassword, setAuthPassword] = useState("");
   const [authName, setAuthName] = useState("");
   const [authMessage, setAuthMessage] = useState("");
@@ -148,8 +151,6 @@ export default function App() {
     [tasks],
   );
 
-  const doneCount = sortedTasks.filter((task) => task.status === "已完成").length;
-
   const filteredTasks = useMemo(() => {
     let result = sortedTasks;
     if (viewMode === "doing") result = result.filter((task) => task.status === "進行中");
@@ -163,6 +164,8 @@ export default function App() {
     }
     return result;
   }, [sortedTasks, viewMode, searchKeyword]);
+
+  const doneCount = sortedTasks.filter((task) => task.status === "已完成").length;
 
   async function fetchProfileAndTasks(userSession) {
     if (!supabase || !userSession?.user) return;
@@ -202,11 +205,10 @@ export default function App() {
       .select("id,user_id,owner_name,title,planned_date,start_datetime,status,created_at")
       .order("planned_date", { ascending: true });
 
-    const { data: taskData, error: taskError } = profileData?.role === "admin"
-      ? await taskQuery
-      : await taskQuery.eq("user_id", userId);
-    if (taskError) throw taskError;
+    const { data: taskData, error: taskError } =
+      profileData.role === "admin" ? await taskQuery : await taskQuery.eq("user_id", userId);
 
+    if (taskError) throw taskError;
     setTasks(taskData || []);
   }
 
@@ -219,7 +221,7 @@ export default function App() {
     let mounted = true;
     const timeoutId = setTimeout(() => {
       if (mounted) {
-        setLoadError("載入逾時，請檢查 Supabase API key / RLS policy / 網路連線");
+        setLoadError("載入逾時，請檢查 Supabase 設定或網路");
         setLoading(false);
       }
     }, 12000);
@@ -235,8 +237,8 @@ export default function App() {
       } catch (error) {
         setLoadError(error?.message || "初始化失敗");
       } finally {
-        setLoading(false);
         clearTimeout(timeoutId);
+        setLoading(false);
       }
     });
 
@@ -264,13 +266,19 @@ export default function App() {
 
   async function doRegister() {
     if (!supabase) return;
-    if (!authEmail.trim() || !authPassword.trim() || !authName.trim()) {
-      setAuthMessage("請填寫 Email、密碼、人員名稱");
+    const username = normalizeUsername(authUsername);
+    if (!username || !authPassword.trim() || !authName.trim()) {
+      setAuthMessage("請填寫帳號、密碼、人員名稱");
+      return;
+    }
+
+    if (!/^[a-z0-9_]{3,20}$/.test(username)) {
+      setAuthMessage("帳號需為 3-20 字，限英文小寫/數字/底線");
       return;
     }
 
     const { error } = await supabase.auth.signUp({
-      email: authEmail.trim(),
+      email: toAuthEmail(username),
       password: authPassword,
       options: { data: { display_name: authName.trim() } },
     });
@@ -288,18 +296,13 @@ export default function App() {
   async function doLogin() {
     if (!supabase) return;
 
-    let email = authEmail.trim();
-    if (email === "admin" && authPassword === "admin") {
-      email = "admin@admin.com";
-    }
-
     const { error } = await supabase.auth.signInWithPassword({
-      email,
+      email: toAuthEmail(normalizeUsername(authUsername)),
       password: authPassword,
     });
 
     if (error) {
-      setAuthMessage("登入失敗，請檢查帳號密碼");
+      setAuthMessage("帳號或密碼錯誤");
       return;
     }
 
@@ -327,25 +330,24 @@ export default function App() {
     }
 
     const parsed = parseTaskInput(input);
-    const payload = {
+    const { error } = await supabase.from("tasks").insert({
       user_id: session.user.id,
       owner_name: profile.display_name,
       title: parsed.title,
       planned_date: plannedDate,
       start_datetime: new Date(startDateTime).toISOString(),
       status: "進行中",
-    };
+    });
 
-    const { error } = await supabase.from("tasks").insert(payload);
     if (error) {
       alert(`新增失敗：${error.message}`);
       return;
     }
 
-    await fetchProfileAndTasks(session);
     setInput("");
     setPlannedDate("");
     setStartDateTime(nowDateTimeLocal());
+    await fetchProfileAndTasks(session);
   }
 
   function fillPlannedDateByText() {
@@ -353,24 +355,19 @@ export default function App() {
   }
 
   async function toggleStatus(task) {
-    if (!supabase) return;
-    const nextStatus = task.status === "已完成" ? "進行中" : "已完成";
-    const { error } = await supabase.from("tasks").update({ status: nextStatus }).eq("id", task.id);
-    if (error) {
-      alert(`更新失敗：${error.message}`);
-      return;
-    }
-    await fetchProfileAndTasks(session);
+    if (!supabase || !session) return;
+    const { error } = await supabase
+      .from("tasks")
+      .update({ status: task.status === "已完成" ? "進行中" : "已完成" })
+      .eq("id", task.id);
+
+    if (!error) await fetchProfileAndTasks(session);
   }
 
   async function removeTask(taskId) {
-    if (!supabase) return;
+    if (!supabase || !session) return;
     const { error } = await supabase.from("tasks").delete().eq("id", taskId);
-    if (error) {
-      alert(`刪除失敗：${error.message}`);
-      return;
-    }
-    await fetchProfileAndTasks(session);
+    if (!error) await fetchProfileAndTasks(session);
   }
 
   function beginEdit(task) {
@@ -386,7 +383,7 @@ export default function App() {
   }
 
   async function saveEdit(task) {
-    if (!supabase) return;
+    if (!supabase || !session) return;
     if (!editingTitle.trim()) {
       alert("標題不能空白");
       return;
@@ -407,13 +404,10 @@ export default function App() {
       .update({ title: editingTitle.trim(), planned_date: editingPlannedDate })
       .eq("id", task.id);
 
-    if (error) {
-      alert(`編輯失敗：${error.message}`);
-      return;
+    if (!error) {
+      cancelEdit();
+      await fetchProfileAndTasks(session);
     }
-
-    await fetchProfileAndTasks(session);
-    cancelEdit();
   }
 
   if (!hasSupabaseEnv) {
@@ -421,7 +415,7 @@ export default function App() {
       <main className="page authPage">
         <section className="panel authPanel">
           <h1>需要 Supabase 設定</h1>
-          <p>請建立 `.env`，並填入 `VITE_SUPABASE_URL` 與 `VITE_SUPABASE_ANON_KEY`。</p>
+          <p>請填入 `VITE_SUPABASE_URL` 與 `VITE_SUPABASE_ANON_KEY`。</p>
         </section>
       </main>
     );
@@ -443,9 +437,7 @@ export default function App() {
         <section className="panel authPanel">
           <h1>載入失敗</h1>
           <p>{loadError}</p>
-          <button type="button" onClick={() => setLoadTick((x) => x + 1)}>
-            重試
-          </button>
+          <button type="button" onClick={() => setLoadTick((x) => x + 1)}>重試</button>
         </section>
       </main>
     );
@@ -456,29 +448,15 @@ export default function App() {
       <main className="page authPage">
         <section className="panel authPanel">
           <h1>{isRegister ? "申請帳號" : "登入"}</h1>
-          <p>這版已改為 Supabase 雲端登入與儲存。</p>
+          <p>不需要信箱，直接用帳號密碼。</p>
 
-          <input value={authEmail} onChange={(event) => setAuthEmail(event.target.value)} placeholder="Email" />
-          <input
-            type="password"
-            value={authPassword}
-            onChange={(event) => setAuthPassword(event.target.value)}
-            placeholder="密碼"
-          />
+          <input value={authUsername} onChange={(e) => setAuthUsername(e.target.value)} placeholder="帳號（例如 worker01）" />
+          <input type="password" value={authPassword} onChange={(e) => setAuthPassword(e.target.value)} placeholder="密碼" />
 
-          {isRegister && (
-            <input
-              value={authName}
-              onChange={(event) => setAuthName(event.target.value)}
-              placeholder="人員名稱（例如：王小明）"
-            />
-          )}
+          {isRegister && <input value={authName} onChange={(e) => setAuthName(e.target.value)} placeholder="人員名稱" />}
 
-          <button type="button" onClick={isRegister ? doRegister : doLogin}>
-            {isRegister ? "註冊" : "登入"}
-          </button>
-
-          <button type="button" className="ghost" onClick={() => setIsRegister((prev) => !prev)}>
+          <button type="button" onClick={isRegister ? doRegister : doLogin}>{isRegister ? "註冊" : "登入"}</button>
+          <button type="button" className="ghost" onClick={() => setIsRegister((x) => !x)}>
             {isRegister ? "我已有帳號，改成登入" : "沒有帳號，申請一個"}
           </button>
 
@@ -493,39 +471,23 @@ export default function App() {
       <header className="hero panel">
         <h1>口語任務板</h1>
         <p>
-          登入者：{profile.display_name}（{profile.email}）{isAdmin ? "・管理員模式" : ""}
+          登入者：{profile.display_name}（{profile.email === "admin@admin.com" ? "admin" : profile.email.replace("@app.local", "")})
+          {isAdmin ? "・管理員模式" : ""}
         </p>
-        <button type="button" className="ghost small" onClick={logout}>
-          登出
-        </button>
+        <button type="button" className="ghost small" onClick={logout}>登出</button>
       </header>
 
       <section className="panel inputPanel">
-        <textarea
-          value={input}
-          onChange={(event) => setInput(event.target.value)}
-          rows={3}
-          placeholder="輸入你的任務內容與截止時間"
-        />
+        <textarea value={input} onChange={(e) => setInput(e.target.value)} rows={3} placeholder="輸入你的任務內容與截止時間" />
 
         <div className="fieldGrid">
-          <label>
-            開始時間（建立時自動帶入）
-            <input type="datetime-local" value={startDateTime} readOnly />
-          </label>
-          <label>
-            預計完成時間（必填）
-            <input type="date" value={plannedDate} onChange={(event) => setPlannedDate(event.target.value)} required />
-          </label>
+          <label>開始時間（建立時自動帶入）<input type="datetime-local" value={startDateTime} readOnly /></label>
+          <label>預計完成時間（必填）<input type="date" value={plannedDate} onChange={(e) => setPlannedDate(e.target.value)} required /></label>
         </div>
 
         <div className="toolbar">
-          <button type="button" className="ghost" onClick={fillPlannedDateByText}>
-            套用口語日期
-          </button>
-          <button type="button" onClick={addTask}>
-            新增任務
-          </button>
+          <button type="button" className="ghost" onClick={fillPlannedDateByText}>套用口語日期</button>
+          <button type="button" onClick={addTask}>新增任務</button>
         </div>
 
         <div className="preview">
@@ -537,47 +499,23 @@ export default function App() {
       </section>
 
       <section className="statsGrid">
-        <article className="panel stat">
-          <h2>{isAdmin ? "全部任務" : "我的總任務"}</h2>
-          <strong>{sortedTasks.length}</strong>
-        </article>
-        <article className="panel stat">
-          <h2>已完成</h2>
-          <strong>{doneCount}</strong>
-        </article>
-        <article className="panel stat">
-          <h2>進行中</h2>
-          <strong>{sortedTasks.length - doneCount}</strong>
-        </article>
+        <article className="panel stat"><h2>{isAdmin ? "全部任務" : "我的總任務"}</h2><strong>{sortedTasks.length}</strong></article>
+        <article className="panel stat"><h2>已完成</h2><strong>{doneCount}</strong></article>
+        <article className="panel stat"><h2>進行中</h2><strong>{sortedTasks.length - doneCount}</strong></article>
       </section>
 
       <section className="panel listPanel">
-        <div className="listHead">
-          <h2>{isAdmin ? "全部任務清單" : "我的任務清單"}</h2>
-          <span>{filteredTasks.length} / {sortedTasks.length} 筆</span>
-        </div>
+        <div className="listHead"><h2>{isAdmin ? "全部任務清單" : "我的任務清單"}</h2><span>{filteredTasks.length} / {sortedTasks.length} 筆</span></div>
 
         <div className="searchBox">
           <label htmlFor="task-search">任務搜尋</label>
-          <input
-            id="task-search"
-            className="searchInput"
-            value={searchKeyword}
-            onChange={(event) => setSearchKeyword(event.target.value)}
-            placeholder="輸入關鍵字（任務標題 / 人員名稱）"
-          />
+          <input id="task-search" className="searchInput" value={searchKeyword} onChange={(e) => setSearchKeyword(e.target.value)} placeholder="輸入關鍵字（任務標題 / 人員名稱）" />
         </div>
 
         <div className="filters">
-          <button type="button" className={viewMode === "all" ? "active" : ""} onClick={() => setViewMode("all")}>
-            全部
-          </button>
-          <button type="button" className={viewMode === "doing" ? "active" : ""} onClick={() => setViewMode("doing")}>
-            進行中
-          </button>
-          <button type="button" className={viewMode === "done" ? "active" : ""} onClick={() => setViewMode("done")}>
-            已完成
-          </button>
+          <button type="button" className={viewMode === "all" ? "active" : ""} onClick={() => setViewMode("all")}>全部</button>
+          <button type="button" className={viewMode === "doing" ? "active" : ""} onClick={() => setViewMode("doing")}>進行中</button>
+          <button type="button" className={viewMode === "done" ? "active" : ""} onClick={() => setViewMode("done")}>已完成</button>
         </div>
 
         {filteredTasks.length === 0 ? (
@@ -586,57 +524,35 @@ export default function App() {
           <div className="list">
             {filteredTasks.map((task) => {
               const dueMeta = getDueMeta(task);
-
               return (
                 <article key={task.id} className={`taskItem ${dueMeta.className}`}>
                   <div className="taskMain">
                     {editingId === task.id ? (
                       <div className="editFields">
-                        <input value={editingTitle} onChange={(event) => setEditingTitle(event.target.value)} />
-                        <input
-                          type="date"
-                          value={editingPlannedDate}
-                          onChange={(event) => setEditingPlannedDate(event.target.value)}
-                        />
+                        <input value={editingTitle} onChange={(e) => setEditingTitle(e.target.value)} />
+                        <input type="date" value={editingPlannedDate} onChange={(e) => setEditingPlannedDate(e.target.value)} />
                       </div>
                     ) : (
                       <h3>{task.title}</h3>
                     )}
                     <p>人員：{task.owner_name}</p>
                     <p>開始時間：{formatDateTime(task.start_datetime)}</p>
-                    <p>
-                      預計完成：{formatDate(task.planned_date)}
-                      {dueMeta.label ? `（${dueMeta.label}）` : ""}
-                    </p>
+                    <p>預計完成：{formatDate(task.planned_date)}{dueMeta.label ? `（${dueMeta.label}）` : ""}</p>
                   </div>
 
-                  <span className={`badge ${task.status === "已完成" ? "done" : "doing"}`}>
-                    {task.status}
-                  </span>
+                  <span className={`badge ${task.status === "已完成" ? "done" : "doing"}`}>{task.status}</span>
 
                   <div className="actions">
-                    <button type="button" onClick={() => toggleStatus(task)}>
-                      {task.status === "已完成" ? "改為進行中" : "標示完成"}
-                    </button>
-
+                    <button type="button" onClick={() => toggleStatus(task)}>{task.status === "已完成" ? "改為進行中" : "標示完成"}</button>
                     {editingId === task.id ? (
                       <>
-                        <button type="button" className="secondary" onClick={() => saveEdit(task)}>
-                          儲存
-                        </button>
-                        <button type="button" className="ghost" onClick={cancelEdit}>
-                          取消
-                        </button>
+                        <button type="button" className="secondary" onClick={() => saveEdit(task)}>儲存</button>
+                        <button type="button" className="ghost" onClick={cancelEdit}>取消</button>
                       </>
                     ) : (
-                      <button type="button" className="secondary" onClick={() => beginEdit(task)}>
-                        編輯
-                      </button>
+                      <button type="button" className="secondary" onClick={() => beginEdit(task)}>編輯</button>
                     )}
-
-                    <button type="button" className="danger" onClick={() => removeTask(task.id)}>
-                      刪除
-                    </button>
+                    <button type="button" className="danger" onClick={() => removeTask(task.id)}>刪除</button>
                   </div>
                 </article>
               );

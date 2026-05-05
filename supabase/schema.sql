@@ -1,4 +1,6 @@
-﻿create table if not exists public.profiles (
+﻿create extension if not exists pgcrypto;
+
+create table if not exists public.profiles (
   id uuid primary key references auth.users(id) on delete cascade,
   email text unique not null,
   display_name text not null,
