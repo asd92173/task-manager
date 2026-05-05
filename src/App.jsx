@@ -431,6 +431,18 @@ export default function App() {
     );
   }
 
+  if (loadError) {
+    return (
+      <main className="page authPage">
+        <section className="panel authPanel">
+          <h1>載入失敗</h1>
+          <p>{loadError}</p>
+          <button type="button" onClick={() => setLoadTick((x) => x + 1)}>重試</button>
+        </section>
+      </main>
+    );
+  }
+
   if (!session || !profile) {
     return (
       <main className="page authPage">
@@ -459,7 +471,13 @@ export default function App() {
       <header className="hero panel">
         <h1>口語任務板</h1>
         <p>
-          登入者：{profile.display_name}（{profile.email === "admin@admin.com" ? "admin" : profile.email.replace("@app.local", "")})
+          登入者：{profile?.display_name || "使用者"}（
+          {profile?.email
+            ? profile.email === "admin@admin.com"
+              ? "admin"
+              : profile.email.replace("@app.local", "")
+            : "unknown"}
+          ）
           {isAdmin ? "・管理員模式" : ""}
         </p>
         <button type="button" className="ghost small" onClick={logout}>登出</button>
