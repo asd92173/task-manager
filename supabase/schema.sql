@@ -20,29 +20,27 @@ create table if not exists public.tasks (
 alter table public.profiles enable row level security;
 alter table public.tasks enable row level security;
 
-create policy if not exists "profiles_select_own_or_admin"
+drop policy if exists "profiles_select_own" on public.profiles;
+create policy "profiles_select_own"
 on public.profiles
 for select
-using (
-  auth.uid() = id
-  or exists (
-    select 1 from public.profiles p
-    where p.id = auth.uid() and p.role = 'admin'
-  )
-);
+using (auth.uid() = id);
 
-create policy if not exists "profiles_insert_own"
+drop policy if exists "profiles_insert_own" on public.profiles;
+create policy "profiles_insert_own"
 on public.profiles
 for insert
 with check (auth.uid() = id);
 
-create policy if not exists "profiles_update_own"
+drop policy if exists "profiles_update_own" on public.profiles;
+create policy "profiles_update_own"
 on public.profiles
 for update
 using (auth.uid() = id)
 with check (auth.uid() = id);
 
-create policy if not exists "tasks_select_own_or_admin"
+drop policy if exists "tasks_select_own_or_admin" on public.tasks;
+create policy "tasks_select_own_or_admin"
 on public.tasks
 for select
 using (
@@ -53,12 +51,20 @@ using (
   )
 );
 
-create policy if not exists "tasks_insert_own"
+drop policy if exists "tasks_insert_own_or_admin" on public.tasks;
+create policy "tasks_insert_own_or_admin"
 on public.tasks
 for insert
-with check (auth.uid() = user_id);
+with check (
+  auth.uid() = user_id
+  or exists (
+    select 1 from public.profiles p
+    where p.id = auth.uid() and p.role = 'admin'
+  )
+);
 
-create policy if not exists "tasks_update_own_or_admin"
+drop policy if exists "tasks_update_own_or_admin" on public.tasks;
+create policy "tasks_update_own_or_admin"
 on public.tasks
 for update
 using (
@@ -76,7 +82,8 @@ with check (
   )
 );
 
-create policy if not exists "tasks_delete_own_or_admin"
+drop policy if exists "tasks_delete_own_or_admin" on public.tasks;
+create policy "tasks_delete_own_or_admin"
 on public.tasks
 for delete
 using (

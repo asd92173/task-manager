@@ -122,6 +122,7 @@ export default function App() {
   const [profile, setProfile] = useState(null);
   const [tasks, setTasks] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
 
   const [isRegister, setIsRegister] = useState(false);
   const [authEmail, setAuthEmail] = useState("");
@@ -168,27 +169,30 @@ export default function App() {
     const userId = userSession.user.id;
     const email = userSession.user.email || "";
 
-    const { data: existingProfile } = await supabase
+    const { data: existingProfile, error: existingProfileError } = await supabase
       .from("profiles")
       .select("id,email,display_name,role")
       .eq("id", userId)
       .maybeSingle();
+    if (existingProfileError) throw existingProfileError;
 
     if (!existingProfile) {
       const displayName = userSession.user.user_metadata?.display_name || email.split("@")[0] || "使用者";
-      await supabase.from("profiles").insert({
+      const { error: insertProfileError } = await supabase.from("profiles").insert({
         id: userId,
         email,
         display_name: displayName,
         role: email === "admin@admin.com" ? "admin" : "user",
       });
+      if (insertProfileError) throw insertProfileError;
     }
 
-    const { data: profileData } = await supabase
+    const { data: profileData, error: profileError } = await supabase
       .from("profiles")
       .select("id,email,display_name,role")
       .eq("id", userId)
       .single();
+    if (profileError) throw profileError;
 
     setProfile(profileData);
 
@@ -197,9 +201,10 @@ export default function App() {
       .select("id,user_id,owner_name,title,planned_date,start_datetime,status,created_at")
       .order("planned_date", { ascending: true });
 
-    const { data: taskData } = profileData?.role === "admin"
+    const { data: taskData, error: taskError } = profileData?.role === "admin"
       ? await taskQuery
       : await taskQuery.eq("user_id", userId);
+    if (taskError) throw taskError;
 
     setTasks(taskData || []);
   }
@@ -214,20 +219,31 @@ export default function App() {
 
     supabase.auth.getSession().then(async ({ data }) => {
       if (!mounted) return;
-      setSession(data.session || null);
-      if (data.session) {
-        await fetchProfileAndTasks(data.session);
+      try {
+        setLoadError("");
+        setSession(data.session || null);
+        if (data.session) {
+          await fetchProfileAndTasks(data.session);
+        }
+      } catch (error) {
+        setLoadError(error?.message || "初始化失敗");
+      } finally {
+        setLoading(false);
       }
-      setLoading(false);
     });
 
     const { data: authListener } = supabase.auth.onAuthStateChange(async (_event, newSession) => {
-      setSession(newSession || null);
-      if (newSession) {
-        await fetchProfileAndTasks(newSession);
-      } else {
-        setProfile(null);
-        setTasks([]);
+      try {
+        setLoadError("");
+        setSession(newSession || null);
+        if (newSession) {
+          await fetchProfileAndTasks(newSession);
+        } else {
+          setProfile(null);
+          setTasks([]);
+        }
+      } catch (error) {
+        setLoadError(error?.message || "載入資料失敗");
       }
     });
 
@@ -236,11 +252,6 @@ export default function App() {
       authListener.subscription.unsubscribe();
     };
   }, []);
-
-  useEffect(() => {
-    if (!session || !supabase) return;
-    fetchProfileAndTasks(session);
-  }, [profile?.role]);
 
   async function doRegister() {
     if (!supabase) return;
@@ -412,6 +423,17 @@ export default function App() {
       <main className="page authPage">
         <section className="panel authPanel">
           <h1>載入中...</h1>
+        </section>
+      </main>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <main className="page authPage">
+        <section className="panel authPanel">
+          <h1>載入失敗</h1>
+          <p>{loadError}</p>
         </section>
       </main>
     );
