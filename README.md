@@ -1,43 +1,37 @@
-﻿# 口語化任務板（React + Vite）
+﻿# 口語化任務板（Supabase 版）
 
-這是一個簡單版「像 Notion 一樣」的任務系統，重點是可用口語化方式輸入：
+這版已改成 Supabase 雲端登入與雲端資料儲存。
 
-- `今天我要寫 PLC 程式，週五前完成`
-- `明天處理報表，4/30 前完成`
-- `下週三要交測試文件`
+## 1) 建立 Supabase 專案
 
-系統會自動解析：
+1. 到 Supabase 建立專案
+2. 在 SQL Editor 貼上 `supabase/schema.sql` 全部內容並執行
+3. 到 Project Settings -> API 複製：
+   - Project URL
+   - anon public key
 
-- 任務內容
-- 截止日期（今天、明天、後天、週幾、YYYY/MM/DD、MM/DD）
+## 2) 設定環境變數
 
-資料儲存在瀏覽器本地端（localStorage）。
+複製 `.env.example` 成 `.env`，填入：
 
-## 本機啟動
+```bash
+VITE_SUPABASE_URL=你的ProjectURL
+VITE_SUPABASE_ANON_KEY=你的AnonKey
+```
+
+## 3) 啟動
 
 ```bash
 npm install
 npm run dev
 ```
 
-## 發布到 GitHub Pages（公開網址）
+## 管理員帳號
 
-專案已內建自動部署流程：`.github/workflows/deploy.yml`
+- 使用 `admin / admin` 會自動轉成 `admin@admin.com` 登入
+- 你需要先在 Supabase Auth 建立這個帳號（email: `admin@admin.com`, password: `admin`）
+- 首次登入後會在 `profiles` 建立角色，預設 `admin@admin.com` 會是 `admin`
 
-1. 建立 GitHub Repo（建議 repo 名稱：`task-manager`）
-2. 把這份專案推到 `main` 分支
-3. 到 GitHub 專案設定：`Settings` -> `Pages`
-4. `Build and deployment` 的來源選 `GitHub Actions`
-5. 之後每次推送到 `main`，都會自動發布
+## 部署
 
-發布後網址通常是：
-
-`https://<你的GitHub帳號>.github.io/<repo名稱>/`
-
-## 功能重點
-
-- 口語輸入自動解析
-- 任務新增
-- 任務狀態切換（進行中 / 已完成）
-- 任務刪除
-- 公開網址可直接使用（不需你本機常駐）
+照原本 GitHub Pages 流程部署即可。

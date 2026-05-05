@@ -1,9 +1,6 @@
-﻿import { useMemo, useState } from "react";
+﻿import { useEffect, useMemo, useState } from "react";
 import "./App.css";
-
-const USERS_KEY = "talk-task-users-v1";
-const SESSION_KEY = "talk-task-session-v1";
-const TASKS_KEY = "talk-task-manager-v2";
+import { hasSupabaseEnv, supabase } from "./lib/supabase";
 
 const WEEKDAY_MAP = { 日: 0, 天: 0, 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6 };
 
@@ -104,27 +101,30 @@ function parseTaskInput(text) {
   return { title, suggestedDate };
 }
 
-function loadJson(key, fallback) {
-  try {
-    const raw = localStorage.getItem(key);
-    if (!raw) return fallback;
-    return JSON.parse(raw);
-  } catch {
-    return fallback;
-  }
-}
+function getDueMeta(task) {
+  const today = toDateOnlyString(new Date());
+  const tomorrowDate = new Date();
+  tomorrowDate.setDate(tomorrowDate.getDate() + 1);
+  const tomorrow = toDateOnlyString(tomorrowDate);
 
-function saveJson(key, value) {
-  localStorage.setItem(key, JSON.stringify(value));
+  const isLate = task.status !== "已完成" && task.planned_date && task.planned_date < today;
+  const isToday = task.status !== "已完成" && task.planned_date === today;
+  const isTomorrow = task.status !== "已完成" && task.planned_date === tomorrow;
+
+  if (isLate) return { className: "late", label: "已逾期" };
+  if (isToday) return { className: "today", label: "今天到期" };
+  if (isTomorrow) return { className: "tomorrow", label: "明天到期" };
+  return { className: "", label: "" };
 }
 
 export default function App() {
-  const [users, setUsers] = useState(() => loadJson(USERS_KEY, []));
-  const [session, setSession] = useState(() => loadJson(SESSION_KEY, null));
-  const [tasks, setTasks] = useState(() => loadJson(TASKS_KEY, []));
+  const [session, setSession] = useState(null);
+  const [profile, setProfile] = useState(null);
+  const [tasks, setTasks] = useState([]);
+  const [loading, setLoading] = useState(true);
 
   const [isRegister, setIsRegister] = useState(false);
-  const [authAccount, setAuthAccount] = useState("");
+  const [authEmail, setAuthEmail] = useState("");
   const [authPassword, setAuthPassword] = useState("");
   const [authName, setAuthName] = useState("");
   const [authMessage, setAuthMessage] = useState("");
@@ -138,108 +138,168 @@ export default function App() {
   const [editingTitle, setEditingTitle] = useState("");
   const [editingPlannedDate, setEditingPlannedDate] = useState("");
 
-  const currentUser = session || null;
-  const isAdmin = currentUser?.role === "admin";
-  const userTasks = useMemo(() => {
-    const ownedTasks = isAdmin
-      ? tasks
-      : tasks.filter((task) => task.ownerAccount === currentUser?.account);
-    return [...ownedTasks].sort((a, b) => {
-      if (!a.plannedDate && !b.plannedDate) return 0;
-      if (!a.plannedDate) return 1;
-      if (!b.plannedDate) return -1;
-      return a.plannedDate.localeCompare(b.plannedDate);
-    });
-  }, [tasks, isAdmin, currentUser?.account]);
-  const doneCount = userTasks.filter((task) => task.status === "已完成").length;
   const preview = useMemo(() => parseTaskInput(input), [input]);
+  const isAdmin = profile?.role === "admin";
+
+  const sortedTasks = useMemo(
+    () => [...tasks].sort((a, b) => (a.planned_date || "").localeCompare(b.planned_date || "")),
+    [tasks],
+  );
+
+  const doneCount = sortedTasks.filter((task) => task.status === "已完成").length;
+
   const filteredTasks = useMemo(() => {
-    let result = userTasks;
+    let result = sortedTasks;
     if (viewMode === "doing") result = result.filter((task) => task.status === "進行中");
     if (viewMode === "done") result = result.filter((task) => task.status === "已完成");
     if (searchKeyword.trim()) {
       const keyword = searchKeyword.trim().toLowerCase();
       result = result.filter(
         (task) =>
-          task.title.toLowerCase().includes(keyword) ||
-          task.ownerName.toLowerCase().includes(keyword),
+          task.title.toLowerCase().includes(keyword) || task.owner_name.toLowerCase().includes(keyword),
       );
     }
     return result;
-  }, [userTasks, viewMode, searchKeyword]);
+  }, [sortedTasks, viewMode, searchKeyword]);
 
-  function upsertUsers(nextUsers) {
-    setUsers(nextUsers);
-    saveJson(USERS_KEY, nextUsers);
+  async function fetchProfileAndTasks(userSession) {
+    if (!supabase || !userSession?.user) return;
+
+    const userId = userSession.user.id;
+    const email = userSession.user.email || "";
+
+    const { data: existingProfile } = await supabase
+      .from("profiles")
+      .select("id,email,display_name,role")
+      .eq("id", userId)
+      .maybeSingle();
+
+    if (!existingProfile) {
+      const displayName = userSession.user.user_metadata?.display_name || email.split("@")[0] || "使用者";
+      await supabase.from("profiles").insert({
+        id: userId,
+        email,
+        display_name: displayName,
+        role: email === "admin@admin.com" ? "admin" : "user",
+      });
+    }
+
+    const { data: profileData } = await supabase
+      .from("profiles")
+      .select("id,email,display_name,role")
+      .eq("id", userId)
+      .single();
+
+    setProfile(profileData);
+
+    const taskQuery = supabase
+      .from("tasks")
+      .select("id,user_id,owner_name,title,planned_date,start_datetime,status,created_at")
+      .order("planned_date", { ascending: true });
+
+    const { data: taskData } = profileData?.role === "admin"
+      ? await taskQuery
+      : await taskQuery.eq("user_id", userId);
+
+    setTasks(taskData || []);
   }
 
-  function upsertTasks(nextTasks) {
-    setTasks(nextTasks);
-    saveJson(TASKS_KEY, nextTasks);
-  }
-
-  function doRegister() {
-    if (!authAccount.trim() || !authPassword.trim() || !authName.trim()) {
-      setAuthMessage("請填寫帳號、密碼、人員名稱");
+  useEffect(() => {
+    if (!hasSupabaseEnv || !supabase) {
+      setLoading(false);
       return;
     }
 
-    if (users.some((item) => item.account === authAccount.trim())) {
-      setAuthMessage("此帳號已存在");
+    let mounted = true;
+
+    supabase.auth.getSession().then(async ({ data }) => {
+      if (!mounted) return;
+      setSession(data.session || null);
+      if (data.session) {
+        await fetchProfileAndTasks(data.session);
+      }
+      setLoading(false);
+    });
+
+    const { data: authListener } = supabase.auth.onAuthStateChange(async (_event, newSession) => {
+      setSession(newSession || null);
+      if (newSession) {
+        await fetchProfileAndTasks(newSession);
+      } else {
+        setProfile(null);
+        setTasks([]);
+      }
+    });
+
+    return () => {
+      mounted = false;
+      authListener.subscription.unsubscribe();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!session || !supabase) return;
+    fetchProfileAndTasks(session);
+  }, [profile?.role]);
+
+  async function doRegister() {
+    if (!supabase) return;
+    if (!authEmail.trim() || !authPassword.trim() || !authName.trim()) {
+      setAuthMessage("請填寫 Email、密碼、人員名稱");
       return;
     }
 
-    const nextUsers = [
-      ...users,
-      { account: authAccount.trim(), password: authPassword, name: authName.trim() },
-    ];
+    const { error } = await supabase.auth.signUp({
+      email: authEmail.trim(),
+      password: authPassword,
+      options: { data: { display_name: authName.trim() } },
+    });
 
-    upsertUsers(nextUsers);
-    const nextSession = { account: authAccount.trim(), name: authName.trim(), role: "user" };
-    setSession(nextSession);
-    saveJson(SESSION_KEY, nextSession);
-    setAuthMessage("註冊成功，已登入");
+    if (error) {
+      setAuthMessage(error.message);
+      return;
+    }
+
+    setAuthMessage("註冊成功，請直接登入");
+    setIsRegister(false);
     setAuthPassword("");
   }
 
-  function doLogin() {
-    if (authAccount.trim() === "admin" && authPassword === "admin") {
-      const adminSession = { account: "admin", name: "管理員", role: "admin" };
-      setSession(adminSession);
-      saveJson(SESSION_KEY, adminSession);
-      setAuthMessage("管理員登入成功");
-      setAuthPassword("");
+  async function doLogin() {
+    if (!supabase) return;
+
+    let email = authEmail.trim();
+    if (email === "admin" && authPassword === "admin") {
+      email = "admin@admin.com";
+    }
+
+    const { error } = await supabase.auth.signInWithPassword({
+      email,
+      password: authPassword,
+    });
+
+    if (error) {
+      setAuthMessage("登入失敗，請檢查帳號密碼");
       return;
     }
 
-    const matched = users.find(
-      (item) => item.account === authAccount.trim() && item.password === authPassword,
-    );
-
-    if (!matched) {
-      setAuthMessage("帳號或密碼錯誤");
-      return;
-    }
-
-    const nextSession = { account: matched.account, name: matched.name, role: "user" };
-    setSession(nextSession);
-    saveJson(SESSION_KEY, nextSession);
-    setAuthMessage("登入成功");
+    setAuthMessage("");
     setAuthPassword("");
   }
 
-  function logout() {
-    setSession(null);
-    localStorage.removeItem(SESSION_KEY);
+  async function logout() {
+    if (!supabase) return;
+    await supabase.auth.signOut();
   }
 
-  function addTask() {
-    if (!currentUser) return;
+  async function addTask() {
+    if (!supabase || !session || !profile) return;
     if (!input.trim()) return;
     if (!plannedDate) {
       alert("請先選擇預計完成時間");
       return;
     }
+
     const startDateOnly = startDateTime.slice(0, 10);
     if (plannedDate < startDateOnly) {
       alert("預計完成時間不得早於開始時間");
@@ -247,49 +307,56 @@ export default function App() {
     }
 
     const parsed = parseTaskInput(input);
-    const nextTasks = [
-      {
-        id: crypto.randomUUID(),
-        title: parsed.title,
-        plannedDate,
-        startDateTime,
-        status: "進行中",
-        ownerName: currentUser.name,
-        ownerAccount: currentUser.account,
-      },
-      ...tasks,
-    ];
+    const payload = {
+      user_id: session.user.id,
+      owner_name: profile.display_name,
+      title: parsed.title,
+      planned_date: plannedDate,
+      start_datetime: new Date(startDateTime).toISOString(),
+      status: "進行中",
+    };
 
-    upsertTasks(nextTasks);
+    const { error } = await supabase.from("tasks").insert(payload);
+    if (error) {
+      alert(`新增失敗：${error.message}`);
+      return;
+    }
+
+    await fetchProfileAndTasks(session);
     setInput("");
     setPlannedDate("");
     setStartDateTime(nowDateTimeLocal());
   }
 
   function fillPlannedDateByText() {
-    if (preview.suggestedDate) {
-      setPlannedDate(preview.suggestedDate);
+    if (preview.suggestedDate) setPlannedDate(preview.suggestedDate);
+  }
+
+  async function toggleStatus(task) {
+    if (!supabase) return;
+    const nextStatus = task.status === "已完成" ? "進行中" : "已完成";
+    const { error } = await supabase.from("tasks").update({ status: nextStatus }).eq("id", task.id);
+    if (error) {
+      alert(`更新失敗：${error.message}`);
+      return;
     }
+    await fetchProfileAndTasks(session);
   }
 
-  function toggleStatus(taskId) {
-    upsertTasks(
-      tasks.map((task) =>
-        task.id === taskId
-          ? { ...task, status: task.status === "已完成" ? "進行中" : "已完成" }
-          : task,
-      ),
-    );
-  }
-
-  function removeTask(taskId) {
-    upsertTasks(tasks.filter((task) => task.id !== taskId));
+  async function removeTask(taskId) {
+    if (!supabase) return;
+    const { error } = await supabase.from("tasks").delete().eq("id", taskId);
+    if (error) {
+      alert(`刪除失敗：${error.message}`);
+      return;
+    }
+    await fetchProfileAndTasks(session);
   }
 
   function beginEdit(task) {
     setEditingId(task.id);
     setEditingTitle(task.title);
-    setEditingPlannedDate(task.plannedDate || "");
+    setEditingPlannedDate(task.planned_date || "");
   }
 
   function cancelEdit() {
@@ -298,7 +365,8 @@ export default function App() {
     setEditingPlannedDate("");
   }
 
-  function saveEdit(taskId, taskStartDateTime) {
+  async function saveEdit(task) {
+    if (!supabase) return;
     if (!editingTitle.trim()) {
       alert("標題不能空白");
       return;
@@ -307,34 +375,56 @@ export default function App() {
       alert("請選擇預計完成時間");
       return;
     }
-    const startDateOnly = taskStartDateTime.slice(0, 10);
+
+    const startDateOnly = task.start_datetime.slice(0, 10);
     if (editingPlannedDate < startDateOnly) {
       alert("預計完成時間不得早於開始時間");
       return;
     }
 
-    upsertTasks(
-      tasks.map((task) =>
-        task.id === taskId
-          ? { ...task, title: editingTitle.trim(), plannedDate: editingPlannedDate }
-          : task,
-      ),
-    );
+    const { error } = await supabase
+      .from("tasks")
+      .update({ title: editingTitle.trim(), planned_date: editingPlannedDate })
+      .eq("id", task.id);
+
+    if (error) {
+      alert(`編輯失敗：${error.message}`);
+      return;
+    }
+
+    await fetchProfileAndTasks(session);
     cancelEdit();
   }
 
-  if (!currentUser) {
+  if (!hasSupabaseEnv) {
+    return (
+      <main className="page authPage">
+        <section className="panel authPanel">
+          <h1>需要 Supabase 設定</h1>
+          <p>請建立 `.env`，並填入 `VITE_SUPABASE_URL` 與 `VITE_SUPABASE_ANON_KEY`。</p>
+        </section>
+      </main>
+    );
+  }
+
+  if (loading) {
+    return (
+      <main className="page authPage">
+        <section className="panel authPanel">
+          <h1>載入中...</h1>
+        </section>
+      </main>
+    );
+  }
+
+  if (!session || !profile) {
     return (
       <main className="page authPage">
         <section className="panel authPanel">
           <h1>{isRegister ? "申請帳號" : "登入"}</h1>
-          <p>先登入才能建立任務，任務會記錄人員名稱。</p>
+          <p>這版已改為 Supabase 雲端登入與儲存。</p>
 
-          <input
-            value={authAccount}
-            onChange={(event) => setAuthAccount(event.target.value)}
-            placeholder="帳號"
-          />
+          <input value={authEmail} onChange={(event) => setAuthEmail(event.target.value)} placeholder="Email" />
           <input
             type="password"
             value={authPassword}
@@ -351,7 +441,7 @@ export default function App() {
           )}
 
           <button type="button" onClick={isRegister ? doRegister : doLogin}>
-            {isRegister ? "註冊並登入" : "登入"}
+            {isRegister ? "註冊" : "登入"}
           </button>
 
           <button type="button" className="ghost" onClick={() => setIsRegister((prev) => !prev)}>
@@ -369,8 +459,7 @@ export default function App() {
       <header className="hero panel">
         <h1>口語任務板</h1>
         <p>
-          登入者：{currentUser.name}（{currentUser.account}）
-          {isAdmin ? "・管理員模式" : ""}
+          登入者：{profile.display_name}（{profile.email}）{isAdmin ? "・管理員模式" : ""}
         </p>
         <button type="button" className="ghost small" onClick={logout}>
           登出
@@ -409,14 +498,14 @@ export default function App() {
           <span>預覽任務：{preview.title || "未解析"}</span>
           <span>口語日期建議：{formatDate(preview.suggestedDate)}</span>
           <span>已選預計完成：{formatDate(plannedDate)}</span>
-          <span>人員：{currentUser.name}</span>
+          <span>人員：{profile.display_name}</span>
         </div>
       </section>
 
       <section className="statsGrid">
         <article className="panel stat">
           <h2>{isAdmin ? "全部任務" : "我的總任務"}</h2>
-          <strong>{userTasks.length}</strong>
+          <strong>{sortedTasks.length}</strong>
         </article>
         <article className="panel stat">
           <h2>已完成</h2>
@@ -424,15 +513,16 @@ export default function App() {
         </article>
         <article className="panel stat">
           <h2>進行中</h2>
-          <strong>{userTasks.length - doneCount}</strong>
+          <strong>{sortedTasks.length - doneCount}</strong>
         </article>
       </section>
 
       <section className="panel listPanel">
         <div className="listHead">
           <h2>{isAdmin ? "全部任務清單" : "我的任務清單"}</h2>
-          <span>{filteredTasks.length} / {userTasks.length} 筆</span>
+          <span>{filteredTasks.length} / {sortedTasks.length} 筆</span>
         </div>
+
         <div className="searchBox">
           <label htmlFor="task-search">任務搜尋</label>
           <input
@@ -443,6 +533,7 @@ export default function App() {
             placeholder="輸入關鍵字（任務標題 / 人員名稱）"
           />
         </div>
+
         <div className="filters">
           <button type="button" className={viewMode === "all" ? "active" : ""} onClick={() => setViewMode("all")}>
             全部
@@ -459,73 +550,63 @@ export default function App() {
           <p className="empty">目前沒有任務，先新增一筆。</p>
         ) : (
           <div className="list">
-            {filteredTasks.map((task) => (
-              (() => {
-                const today = nowDateTimeLocal().slice(0, 10);
-                const tomorrowDate = new Date();
-                tomorrowDate.setDate(tomorrowDate.getDate() + 1);
-                const tomorrow = toDateOnlyString(tomorrowDate);
-                const isLate = task.status !== "已完成" && task.plannedDate && task.plannedDate < today;
-                const isDueToday = task.status !== "已完成" && task.plannedDate === today;
-                const isDueTomorrow = task.status !== "已完成" && task.plannedDate === tomorrow;
-                const dueClass = isLate ? "late" : isDueToday ? "today" : isDueTomorrow ? "tomorrow" : "";
-                const dueText = isLate ? "已逾期" : isDueToday ? "今天到期" : isDueTomorrow ? "明天到期" : "";
-                return (
-              <article
-                key={task.id}
-                className={`taskItem ${dueClass}`}
-              >
-                <div className="taskMain">
-                  {editingId === task.id ? (
-                    <div className="editFields">
-                      <input value={editingTitle} onChange={(event) => setEditingTitle(event.target.value)} />
-                      <input
-                        type="date"
-                        value={editingPlannedDate}
-                        onChange={(event) => setEditingPlannedDate(event.target.value)}
-                      />
-                    </div>
-                  ) : (
-                    <h3>{task.title}</h3>
-                  )}
-                  <p>人員：{task.ownerName}</p>
-                  <p>開始時間：{formatDateTime(task.startDateTime)}</p>
-                  <p>
-                    預計完成：{formatDate(task.plannedDate)}
-                    {dueText ? `（${dueText}）` : ""}
-                  </p>
-                </div>
+            {filteredTasks.map((task) => {
+              const dueMeta = getDueMeta(task);
 
-                <span className={`badge ${task.status === "已完成" ? "done" : "doing"}`}>
-                  {task.status}
-                </span>
+              return (
+                <article key={task.id} className={`taskItem ${dueMeta.className}`}>
+                  <div className="taskMain">
+                    {editingId === task.id ? (
+                      <div className="editFields">
+                        <input value={editingTitle} onChange={(event) => setEditingTitle(event.target.value)} />
+                        <input
+                          type="date"
+                          value={editingPlannedDate}
+                          onChange={(event) => setEditingPlannedDate(event.target.value)}
+                        />
+                      </div>
+                    ) : (
+                      <h3>{task.title}</h3>
+                    )}
+                    <p>人員：{task.owner_name}</p>
+                    <p>開始時間：{formatDateTime(task.start_datetime)}</p>
+                    <p>
+                      預計完成：{formatDate(task.planned_date)}
+                      {dueMeta.label ? `（${dueMeta.label}）` : ""}
+                    </p>
+                  </div>
 
-                <div className="actions">
-                  <button type="button" onClick={() => toggleStatus(task.id)}>
-                    {task.status === "已完成" ? "改為進行中" : "標示完成"}
-                  </button>
-                  {editingId === task.id ? (
-                    <>
-                      <button type="button" className="secondary" onClick={() => saveEdit(task.id, task.startDateTime)}>
-                        儲存
-                      </button>
-                      <button type="button" className="ghost" onClick={cancelEdit}>
-                        取消
-                      </button>
-                    </>
-                  ) : (
-                    <button type="button" className="secondary" onClick={() => beginEdit(task)}>
-                      編輯
+                  <span className={`badge ${task.status === "已完成" ? "done" : "doing"}`}>
+                    {task.status}
+                  </span>
+
+                  <div className="actions">
+                    <button type="button" onClick={() => toggleStatus(task)}>
+                      {task.status === "已完成" ? "改為進行中" : "標示完成"}
                     </button>
-                  )}
-                  <button type="button" className="danger" onClick={() => removeTask(task.id)}>
-                    刪除
-                  </button>
-                </div>
-              </article>
-                );
-              })()
-            ))}
+
+                    {editingId === task.id ? (
+                      <>
+                        <button type="button" className="secondary" onClick={() => saveEdit(task)}>
+                          儲存
+                        </button>
+                        <button type="button" className="ghost" onClick={cancelEdit}>
+                          取消
+                        </button>
+                      </>
+                    ) : (
+                      <button type="button" className="secondary" onClick={() => beginEdit(task)}>
+                        編輯
+                      </button>
+                    )}
+
+                    <button type="button" className="danger" onClick={() => removeTask(task.id)}>
+                      刪除
+                    </button>
+                  </div>
+                </article>
+              );
+            })}
           </div>
         )}
       </section>
