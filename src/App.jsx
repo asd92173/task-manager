@@ -69,6 +69,22 @@ function saveSession(value) {
   localStorage.setItem(SESSION_KEY, JSON.stringify(value));
 }
 
+async function resolveCurrentUser(session) {
+  if (!supabase || !session?.username) return null;
+  const { data, error } = await supabase
+    .from("app_users")
+    .select("id,username,display_name,role")
+    .eq("username", String(session.username).trim().toLowerCase())
+    .maybeSingle();
+  if (error || !data) return null;
+  return {
+    userId: data.id,
+    username: data.username,
+    displayName: data.display_name,
+    role: data.role,
+  };
+}
+
 export default function App() {
   const connectedUrl = String(import.meta.env.VITE_SUPABASE_URL || "").trim();
   const [session, setSession] = useState(loadSession);
@@ -142,7 +158,15 @@ export default function App() {
 
     async function init() {
       if (hasSupabaseEnv && supabase && session) {
-        await fetchTasks(session);
+        const fixedSession = await resolveCurrentUser(session);
+        if (!fixedSession) {
+          localStorage.removeItem(SESSION_KEY);
+          if (mounted) setSession(null);
+        } else {
+          saveSession(fixedSession);
+          if (mounted) setSession(fixedSession);
+          await fetchTasks(fixedSession);
+        }
       }
       if (mounted) setLoading(false);
     }
@@ -260,10 +284,19 @@ export default function App() {
       return;
     }
 
+    const fixedSession = await resolveCurrentUser(session);
+    if (!fixedSession) {
+      alert("登入狀態已失效，請重新登入");
+      logout();
+      return;
+    }
+    saveSession(fixedSession);
+    setSession(fixedSession);
+
     const parsed = parseTaskInput(input);
     const { error } = await supabase.from("tasks").insert({
-      user_id: session.userId,
-      owner_name: session.displayName,
+      user_id: fixedSession.userId,
+      owner_name: fixedSession.displayName,
       title: parsed.title,
       planned_date: plannedDate,
       start_datetime: new Date(startDateTime).toISOString(),
