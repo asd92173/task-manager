@@ -123,6 +123,7 @@ export default function App() {
   const [tasks, setTasks] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
+  const [loadTick, setLoadTick] = useState(0);
 
   const [isRegister, setIsRegister] = useState(false);
   const [authEmail, setAuthEmail] = useState("");
@@ -216,6 +217,12 @@ export default function App() {
     }
 
     let mounted = true;
+    const timeoutId = setTimeout(() => {
+      if (mounted) {
+        setLoadError("載入逾時，請檢查 Supabase API key / RLS policy / 網路連線");
+        setLoading(false);
+      }
+    }, 12000);
 
     supabase.auth.getSession().then(async ({ data }) => {
       if (!mounted) return;
@@ -229,6 +236,7 @@ export default function App() {
         setLoadError(error?.message || "初始化失敗");
       } finally {
         setLoading(false);
+        clearTimeout(timeoutId);
       }
     });
 
@@ -249,9 +257,10 @@ export default function App() {
 
     return () => {
       mounted = false;
+      clearTimeout(timeoutId);
       authListener.subscription.unsubscribe();
     };
-  }, []);
+  }, [loadTick]);
 
   async function doRegister() {
     if (!supabase) return;
@@ -434,6 +443,9 @@ export default function App() {
         <section className="panel authPanel">
           <h1>載入失敗</h1>
           <p>{loadError}</p>
+          <button type="button" onClick={() => setLoadTick((x) => x + 1)}>
+            重試
+          </button>
         </section>
       </main>
     );
