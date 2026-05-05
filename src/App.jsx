@@ -1,6 +1,6 @@
 ﻿import { useEffect, useMemo, useState } from "react";
 import "./App.css";
-import { hasSupabaseEnv, supabase } from "./lib/supabase";
+import { hasSupabaseEnv, supabase, supabaseInitError } from "./lib/supabase";
 
 const WEEKDAY_MAP = { 日: 0, 天: 0, 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6 };
 
@@ -413,6 +413,17 @@ export default function App() {
         <section className="panel authPanel">
           <h1>需要 Supabase 設定</h1>
           <p>請填入 `VITE_SUPABASE_URL` 與 `VITE_SUPABASE_ANON_KEY`。</p>
+        </section>
+      </main>
+    );
+  }
+
+  if (supabaseInitError || !supabase) {
+    return (
+      <main className="page authPage">
+        <section className="panel authPanel">
+          <h1>Supabase 初始化失敗</h1>
+          <p>{supabaseInitError || "Supabase client 未建立"}</p>
         </section>
       </main>
     );
