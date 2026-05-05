@@ -70,6 +70,7 @@ function saveSession(value) {
 }
 
 export default function App() {
+  const connectedUrl = String(import.meta.env.VITE_SUPABASE_URL || "").trim();
   const [session, setSession] = useState(loadSession);
   const [tasks, setTasks] = useState([]);
   const [loading, setLoading] = useState(Boolean(hasSupabaseEnv && supabase));
@@ -222,7 +223,7 @@ export default function App() {
       .maybeSingle();
 
     if (error || !data) {
-      setAuthMessage("帳號或密碼錯誤");
+      setAuthMessage(error?.message || "帳號或密碼錯誤");
       return;
     }
 
@@ -373,6 +374,7 @@ export default function App() {
         <section className="panel authPanel">
           <h1>{isRegister ? "申請帳號" : "登入"}</h1>
           <p>不用信箱，直接用你自建帳號密碼。</p>
+          <p style={{ fontSize: 12, color: "#5d7396" }}>目前連線：{connectedUrl || "未設定"}</p>
 
           <input
             value={authUsername}
