@@ -1,5 +1,3 @@
--- Task manager repair script
--- 1) Ensure required tables exist
 create extension if not exists pgcrypto;
 
 create table if not exists public.app_users (
@@ -22,7 +20,6 @@ create table if not exists public.tasks (
   created_at timestamptz not null default now()
 );
 
--- 2) RLS off for simple mode
 alter table public.app_users disable row level security;
 alter table public.tasks disable row level security;
 
@@ -30,7 +27,6 @@ grant usage on schema public to anon, authenticated;
 grant select, insert, update, delete on table public.app_users to anon, authenticated;
 grant select, insert, update, delete on table public.tasks to anon, authenticated;
 
--- 3) Ensure admin account
 insert into public.app_users (username, password, display_name, role)
 values ('admin', 'admin', '管理員', 'admin')
 on conflict (username) do update
@@ -38,10 +34,11 @@ set password = excluded.password,
     display_name = excluded.display_name,
     role = excluded.role;
 
--- 4) Rebuild FK and clean orphan tasks
 delete from public.tasks t
 where not exists (
-  select 1 from public.app_users u where u.id = t.user_id
+  select 1
+  from public.app_users u
+  where u.id = t.user_id
 );
 
 alter table public.tasks
@@ -51,12 +48,3 @@ alter table public.tasks
 add constraint tasks_user_id_fkey
 foreign key (user_id) references public.app_users(id)
 on delete cascade;
-
--- 5) Verify
-select relname, relrowsecurity
-from pg_class
-where relname in ('app_users', 'tasks');
-
-select username, role
-from public.app_users
-where username = 'admin';

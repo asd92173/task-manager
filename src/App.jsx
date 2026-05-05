@@ -33,29 +33,6 @@ function formatDateTime(dateTimeString) {
   )}:${pad(date.getMinutes())}`;
 }
 
-function parseTaskInput(text) {
-  const trimmed = text.trim();
-  return { title: trimmed || "未命名任務" };
-}
-
-function getDueMeta(task) {
-  const today = toDateOnlyString(new Date());
-  const tomorrowDate = new Date();
-  tomorrowDate.setDate(tomorrowDate.getDate() + 1);
-  const tomorrow = toDateOnlyString(tomorrowDate);
-
-  if (task.status !== "已完成" && task.planned_date && task.planned_date < today) {
-    return { className: "late", label: "已逾期" };
-  }
-  if (task.status !== "已完成" && task.planned_date === today) {
-    return { className: "today", label: "今天到期" };
-  }
-  if (task.status !== "已完成" && task.planned_date === tomorrow) {
-    return { className: "tomorrow", label: "明天到期" };
-  }
-  return { className: "", label: "" };
-}
-
 function loadSession() {
   try {
     const raw = localStorage.getItem(SESSION_KEY);
@@ -85,6 +62,24 @@ async function resolveCurrentUser(session) {
   };
 }
 
+function getDueMeta(task) {
+  const today = toDateOnlyString(new Date());
+  const tomorrowDate = new Date();
+  tomorrowDate.setDate(tomorrowDate.getDate() + 1);
+  const tomorrow = toDateOnlyString(tomorrowDate);
+
+  if (task.status !== "已完成" && task.planned_date && task.planned_date < today) {
+    return { className: "late", label: "已逾期" };
+  }
+  if (task.status !== "已完成" && task.planned_date === today) {
+    return { className: "today", label: "今天到期" };
+  }
+  if (task.status !== "已完成" && task.planned_date === tomorrow) {
+    return { className: "tomorrow", label: "明天到期" };
+  }
+  return { className: "", label: "" };
+}
+
 export default function App() {
   const connectedUrl = String(import.meta.env.VITE_SUPABASE_URL || "").trim();
   const [session, setSession] = useState(loadSession);
@@ -107,51 +102,32 @@ export default function App() {
   const [editingTitle, setEditingTitle] = useState("");
   const [editingPlannedDate, setEditingPlannedDate] = useState("");
 
-  const preview = useMemo(() => parseTaskInput(input), [input]);
   const isAdmin = session?.role === "admin";
 
-  const sortedTasks = useMemo(
-    () => [...tasks].sort((a, b) => (a.planned_date || "").localeCompare(b.planned_date || "")),
-    [tasks],
+  const fetchTasks = useCallback(
+    async (currentSession = session) => {
+      if (!supabase || !currentSession) {
+        setTasks([]);
+        return;
+      }
+
+      const query = supabase
+        .from("tasks")
+        .select("id,user_id,owner_name,title,planned_date,start_datetime,status,created_at")
+        .order("planned_date", { ascending: true });
+
+      const { data, error } = isAdmin ? await query : await query.eq("user_id", currentSession.userId);
+
+      if (error) {
+        setErrorText(error.message);
+        return;
+      }
+
+      setErrorText("");
+      setTasks(data || []);
+    },
+    [isAdmin, session],
   );
-
-  const filteredTasks = useMemo(() => {
-    let result = sortedTasks;
-    if (viewMode === "doing") result = result.filter((task) => task.status === "進行中");
-    if (viewMode === "done") result = result.filter((task) => task.status === "已完成");
-    if (searchKeyword.trim()) {
-      const keyword = searchKeyword.trim().toLowerCase();
-      result = result.filter(
-        (task) =>
-          task.title.toLowerCase().includes(keyword) || task.owner_name.toLowerCase().includes(keyword),
-      );
-    }
-    return result;
-  }, [sortedTasks, viewMode, searchKeyword]);
-
-  const doneCount = sortedTasks.filter((task) => task.status === "已完成").length;
-
-  const fetchTasks = useCallback(async (currentSession = session) => {
-    if (!supabase || !currentSession) {
-      setTasks([]);
-      return;
-    }
-
-    const query = supabase
-      .from("tasks")
-      .select("id,user_id,owner_name,title,planned_date,start_datetime,status,created_at")
-      .order("planned_date", { ascending: true });
-
-    const { data, error } = isAdmin ? await query : await query.eq("user_id", currentSession.userId);
-
-    if (error) {
-      setErrorText(error.message);
-      return;
-    }
-
-    setErrorText("");
-    setTasks(data || []);
-  }, [isAdmin, session]);
 
   useEffect(() => {
     let mounted = true;
@@ -177,6 +153,27 @@ export default function App() {
     };
   }, [fetchTasks, session]);
 
+  const sortedTasks = useMemo(
+    () => [...tasks].sort((a, b) => (a.planned_date || "").localeCompare(b.planned_date || "")),
+    [tasks],
+  );
+
+  const filteredTasks = useMemo(() => {
+    let result = sortedTasks;
+    if (viewMode === "doing") result = result.filter((task) => task.status === "進行中");
+    if (viewMode === "done") result = result.filter((task) => task.status === "已完成");
+    if (searchKeyword.trim()) {
+      const keyword = searchKeyword.trim().toLowerCase();
+      result = result.filter(
+        (task) =>
+          task.title.toLowerCase().includes(keyword) || task.owner_name.toLowerCase().includes(keyword),
+      );
+    }
+    return result;
+  }, [sortedTasks, viewMode, searchKeyword]);
+
+  const doneCount = sortedTasks.filter((task) => task.status === "已完成").length;
+
   async function doRegister() {
     if (!supabase) return;
     if (!authUsername.trim() || !authPassword.trim() || !authName.trim()) {
@@ -185,6 +182,8 @@ export default function App() {
     }
 
     const username = authUsername.trim().toLowerCase();
+    const password = authPassword.trim();
+
     const { data: exists, error: checkError } = await supabase
       .from("app_users")
       .select("id")
@@ -205,7 +204,7 @@ export default function App() {
       .from("app_users")
       .insert({
         username,
-        password: authPassword,
+        password,
         display_name: authName.trim(),
         role: username === "admin" ? "admin" : "user",
       })
@@ -223,7 +222,6 @@ export default function App() {
       displayName: data.display_name,
       role: data.role,
     };
-
     saveSession(nextSession);
     setSession(nextSession);
     setAuthMessage("");
@@ -238,12 +236,13 @@ export default function App() {
     }
 
     const username = authUsername.trim().toLowerCase();
+    const password = authPassword.trim();
 
     const { data, error } = await supabase
       .from("app_users")
       .select("id,username,display_name,role")
       .eq("username", username)
-      .eq("password", authPassword)
+      .eq("password", password)
       .maybeSingle();
 
     if (error || !data) {
@@ -257,7 +256,6 @@ export default function App() {
       displayName: data.display_name,
       role: data.role,
     };
-
     saveSession(nextSession);
     setSession(nextSession);
     setAuthMessage("");
@@ -286,18 +284,17 @@ export default function App() {
 
     const fixedSession = await resolveCurrentUser(session);
     if (!fixedSession) {
-      alert("登入狀態已失效，請重新登入");
+      alert("登入狀態失效，請重新登入");
       logout();
       return;
     }
     saveSession(fixedSession);
     setSession(fixedSession);
 
-    const parsed = parseTaskInput(input);
     const { error } = await supabase.from("tasks").insert({
       user_id: fixedSession.userId,
       owner_name: fixedSession.displayName,
-      title: parsed.title,
+      title: input.trim(),
       planned_date: plannedDate,
       start_datetime: new Date(startDateTime).toISOString(),
       status: "進行中",
@@ -311,7 +308,7 @@ export default function App() {
     setInput("");
     setPlannedDate("");
     setStartDateTime(nowDateTimeLocal());
-    await fetchTasks();
+    await fetchTasks(fixedSession);
   }
 
   async function toggleStatus(task) {
@@ -374,7 +371,7 @@ export default function App() {
       <main className="page authPage">
         <section className="panel authPanel">
           <h1>請設定 Supabase 連線</h1>
-          <p>請在環境變數填入 VITE_SUPABASE_URL 與 VITE_SUPABASE_ANON_KEY</p>
+          <p>請填入 VITE_SUPABASE_URL 與 VITE_SUPABASE_ANON_KEY</p>
         </section>
       </main>
     );
@@ -406,7 +403,7 @@ export default function App() {
       <main className="page authPage">
         <section className="panel authPanel">
           <h1>{isRegister ? "申請帳號" : "登入"}</h1>
-          <p>不用信箱，直接用你自建帳號密碼。</p>
+          <p>不用信箱，直接用自建帳號密碼。</p>
           <p style={{ fontSize: 12, color: "#5d7396" }}>目前連線：{connectedUrl || "未設定"}</p>
 
           <input
@@ -490,7 +487,6 @@ export default function App() {
         </div>
 
         <div className="preview">
-          <span>解析標題：{preview.title}</span>
           <span>預計完成：{formatDate(plannedDate)}</span>
           <span>人員：{session.displayName}</span>
         </div>
