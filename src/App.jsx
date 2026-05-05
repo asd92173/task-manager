@@ -219,28 +219,29 @@ export default function App() {
     }
 
     let mounted = true;
-    const timeoutId = setTimeout(() => {
-      if (mounted) {
-        setLoadError("載入逾時，請檢查 Supabase 設定或網路");
-        setLoading(false);
-      }
-    }, 12000);
+    const timeoutPromise = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error("session_timeout")), 2500),
+    );
 
-    supabase.auth.getSession().then(async ({ data }) => {
-      if (!mounted) return;
-      try {
-        setLoadError("");
-        setSession(data.session || null);
-        if (data.session) {
+    Promise.race([supabase.auth.getSession(), timeoutPromise])
+      .then(async (result) => {
+        if (!mounted) return;
+        const data = result?.data;
+        setSession(data?.session || null);
+        if (data?.session) {
           await fetchProfileAndTasks(data.session);
         }
-      } catch (error) {
-        setLoadError(error?.message || "初始化失敗");
-      } finally {
-        clearTimeout(timeoutId);
+      })
+      .catch(() => {
+        if (!mounted) return;
+        setSession(null);
+        setProfile(null);
+        setTasks([]);
+      })
+      .finally(() => {
+        if (!mounted) return;
         setLoading(false);
-      }
-    });
+      });
 
     const { data: authListener } = supabase.auth.onAuthStateChange(async (_event, newSession) => {
       try {
@@ -259,7 +260,6 @@ export default function App() {
 
     return () => {
       mounted = false;
-      clearTimeout(timeoutId);
       authListener.subscription.unsubscribe();
     };
   }, [loadTick]);
@@ -426,18 +426,6 @@ export default function App() {
       <main className="page authPage">
         <section className="panel authPanel">
           <h1>載入中...</h1>
-        </section>
-      </main>
-    );
-  }
-
-  if (loadError) {
-    return (
-      <main className="page authPage">
-        <section className="panel authPanel">
-          <h1>載入失敗</h1>
-          <p>{loadError}</p>
-          <button type="button" onClick={() => setLoadTick((x) => x + 1)}>重試</button>
         </section>
       </main>
     );
