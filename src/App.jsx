@@ -105,7 +105,7 @@ export default function App() {
   const isAdmin = session?.role === "admin";
 
   const fetchTasks = useCallback(
-    async (currentSession = session) => {
+    async (currentSession) => {
       if (!supabase || !currentSession) {
         setTasks([]);
         return;
@@ -116,7 +116,8 @@ export default function App() {
         .select("id,user_id,owner_name,title,planned_date,start_datetime,status,created_at")
         .order("planned_date", { ascending: true });
 
-      const { data, error } = isAdmin ? await query : await query.eq("user_id", currentSession.userId);
+      const { data, error } =
+        currentSession.role === "admin" ? await query : await query.eq("user_id", currentSession.userId);
 
       if (error) {
         setErrorText(error.message);
@@ -126,32 +127,53 @@ export default function App() {
       setErrorText("");
       setTasks(data || []);
     },
-    [isAdmin, session],
+    [],
   );
 
   useEffect(() => {
     let mounted = true;
+    const timeoutId = window.setTimeout(() => {
+      if (!mounted) return;
+      localStorage.removeItem(SESSION_KEY);
+      setSession(null);
+      setErrorText("載入逾時，請重新登入");
+      setLoading(false);
+    }, 8000);
 
     async function init() {
-      if (hasSupabaseEnv && supabase && session) {
-        const fixedSession = await resolveCurrentUser(session);
-        if (!fixedSession) {
-          localStorage.removeItem(SESSION_KEY);
-          if (mounted) setSession(null);
-        } else {
-          saveSession(fixedSession);
-          if (mounted) setSession(fixedSession);
-          await fetchTasks(fixedSession);
+      try {
+        const storedSession = loadSession();
+        if (hasSupabaseEnv && supabase && storedSession?.username) {
+          const fixedSession = await resolveCurrentUser(storedSession);
+          if (!mounted) return;
+
+          if (!fixedSession) {
+            localStorage.removeItem(SESSION_KEY);
+            setSession(null);
+          } else {
+            saveSession(fixedSession);
+            setSession(fixedSession);
+            await fetchTasks(fixedSession);
+          }
         }
+      } catch (error) {
+        if (mounted) {
+          localStorage.removeItem(SESSION_KEY);
+          setSession(null);
+          setErrorText(error?.message || "載入失敗，請重新登入");
+        }
+      } finally {
+        window.clearTimeout(timeoutId);
+        if (mounted) setLoading(false);
       }
-      if (mounted) setLoading(false);
     }
 
     init();
     return () => {
       mounted = false;
+      window.clearTimeout(timeoutId);
     };
-  }, [fetchTasks, session]);
+  }, [fetchTasks]);
 
   const sortedTasks = useMemo(
     () => [...tasks].sort((a, b) => (a.planned_date || "").localeCompare(b.planned_date || "")),
@@ -317,13 +339,13 @@ export default function App() {
       .from("tasks")
       .update({ status: task.status === "已完成" ? "進行中" : "已完成" })
       .eq("id", task.id);
-    if (!error) await fetchTasks();
+    if (!error) await fetchTasks(session);
   }
 
   async function removeTask(taskId) {
     if (!supabase) return;
     const { error } = await supabase.from("tasks").delete().eq("id", taskId);
-    if (!error) await fetchTasks();
+    if (!error) await fetchTasks(session);
   }
 
   function beginEdit(task) {
@@ -362,7 +384,7 @@ export default function App() {
 
     if (!error) {
       cancelEdit();
-      await fetchTasks();
+      await fetchTasks(session);
     }
   }
 
